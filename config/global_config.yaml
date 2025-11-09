@@ -1,0 +1,11 @@
+project_name: AjiFinal_Hypnos6
+device: cpu
+random_seed: 42
+
+filter_low: 0.3
+filter_high: 35.0
+notch_freqs: [50.0]
+artifact_thresh_uV: 200.0
+epoch_length_s: 30
+epoch_step_s: 5
+prediction_horizon_s: 30

@@ -1,0 +1,74 @@
+# ------------------------------
+# Python ignores
+# ------------------------------
+__pycache__/
+*.py[cod]
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+*.pyo
+
+# ------------------------------
+# Virtual environments
+# ------------------------------
+.env
+.venv/
+env/
+venv/
+Scripts/
+Lib/
+Include/
+bin/
+pip-wheel-metadata/
+
+# ------------------------------
+# Logs, temp files, and data
+# ------------------------------
+*.log
+*.tmp
+*.bak
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ------------------------------
+# VS Code and project configs
+# ------------------------------
+.vscode/
+.idea/
+*.code-workspace
+
+# ------------------------------
+# Jupyter / Notebooks
+# ------------------------------
+.ipynb_checkpoints/
+notebooks/.ipynb_checkpoints/
+
+# ------------------------------
+# Cache & analysis outputs
+# ------------------------------
+__pycache__/
+results/logs/
+*.csv
+*.json
+*.npy
+*.pkl
+
+# ------------------------------
+# System files
+# ------------------------------
+desktop.ini
+# Ignore large local folders
+data/
+results/
+# Compiled bytecode
+*.pyc
+__pycache__/
+
+# Checkpoints and cache
+.cache/
+*.checkpoint

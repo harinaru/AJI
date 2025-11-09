@@ -1,0 +1,6 @@
+project_name: AjiFinal_Hypnos6
+device: cpu
+random_seed: 42
+data_root: data/
+results_root: results/
+log_level: INFO

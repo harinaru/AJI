@@ -1,10 +1,11 @@
 # ===============================================================
 # src/phase2_features/time_domain.py
-# v4.3.3_stable — Research-Grade Time-Domain Feature Extractor
+# v4.4_research_final — Enhanced EEG Time-Domain Feature Extractor
 # ===============================================================
 """
-EEG Time-Domain Feature Extractor (30+ features)
-Compatible with Phase 2 Feature Manager (v4.3.3)
+EEG Time-Domain Feature Extractor (35+ features)
+Compatible with Phase 2 Feature Manager (v4.4)
+Includes improved Willison Amplitude computation and safer channel handling.
 """
 
 import numpy as np
@@ -14,7 +15,7 @@ import warnings
 from typing import Dict, Any
 
 # ---------------------------------------------------------------
-# Optional Entropy Library (safe import)
+# Optional Entropy Library
 # ---------------------------------------------------------------
 try:
     import antropy as ant
@@ -98,10 +99,11 @@ def extract_time_features(x: np.ndarray, sfreq: float, prefix: str = "") -> Dict
 
     feats[f"{prefix}_curve_length"] = float(np.sum(np.abs(np.diff(x))))
 
-    # --- Dynamic / Willison ---
+    # --- Dynamic / Willison Amplitude (updated) ---
     dx = np.diff(x)
     feats[f"{prefix}_slope_sign_changes"] = int(np.sum(dx[:-1] * dx[1:] < 0))
-    feats[f"{prefix}_willison_amplitude"] = int(np.sum(np.abs(np.diff(x)) > 0.05))
+    # Continuous Willison amplitude (not thresholded)
+    feats[f"{prefix}_willison_amplitude"] = float(np.mean(np.abs(dx)))
 
     # --- Entropy & Complexity ---
     feats[f"{prefix}_approx_entropy"] = 0.0
@@ -155,13 +157,17 @@ def extract_all_channels(epoch: np.ndarray, sfreq: float, ch_names=None) -> Dict
     for idx, ch in enumerate(ch_names):
         feats.update(extract_time_features(epoch[idx], sfreq, prefix=ch))
 
+    # --- Global statistical features across all channels ---
     feats["global_mean"] = float(np.mean(epoch))
     feats["global_std"] = float(np.std(epoch))
+    feats["global_energy"] = float(np.sum(epoch ** 2))
+    feats["global_rms"] = float(np.sqrt(np.mean(epoch ** 2)))
+
     return feats
 
 
 # ---------------------------------------------------------------
-# Epoch-level Wrapper (expected by feature_manager)
+# Epoch-level Wrapper (used by feature_manager)
 # ---------------------------------------------------------------
 def extract_time_features_with_metadata(epoch, sfreq, ch_names, epoch_idx, start_s, end_s, overlap_s):
     feats = extract_all_channels(epoch, sfreq, ch_names)

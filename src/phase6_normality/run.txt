@@ -1,0 +1,2 @@
+python -m src.phase6_normality.main
+python -m src.phase6_normality.phase6B_tail_uncertainty

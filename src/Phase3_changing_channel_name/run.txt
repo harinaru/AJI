@@ -1,0 +1,3 @@
+python -m src.Phase3_changing_channel_name.main   
+python -m src.Phase3_changing_channel_name.channel_presence_final_report
+python -m src.Phase3_changing_channel_name.channel_presence_to_csv.py   

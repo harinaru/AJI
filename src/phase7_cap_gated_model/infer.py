@@ -2,10 +2,10 @@
 PHASE 7.5 — INFERENCE & UNCERTAINTY EXTRACTION
 CAP-Gated Temporal Normality Model
 
-- Loads trained checkpoints
-- Runs inference on all subjects
-- Computes reconstruction-based uncertainty
-- Saves research-grade CSV outputs
+✔ Loads trained checkpoints (raw state_dict supported)
+✔ Runs inference on all subjects
+✔ Computes reconstruction-based uncertainty
+✔ Saves research-grade CSV outputs
 """
 
 from pathlib import Path
@@ -21,7 +21,7 @@ from .model import CAPGatedTemporalModel
 
 
 # =========================================================
-# DEVICE (GPU OPTIONAL FOR INFERENCE)
+# DEVICE
 # =========================================================
 
 def get_device():
@@ -40,36 +40,39 @@ def get_device():
 @torch.no_grad()
 def compute_subject_metrics(model, loader, device):
     """
-    Computes reconstruction-error-based uncertainty
+    Computes next-step reconstruction error based uncertainty
     """
     model.eval()
-    results = []
+    rows = []
 
     for batch in tqdm(loader, desc="Inference"):
-        features = batch["features"].to(device)
-        cap = batch["cap_flags"].to(device)
-        mask = batch["mask"].to(device)
+        features = batch["features"].to(device)     # [B, T, F]
+        cap = batch["cap_flags"].to(device)         # [B, T]
+        mask = batch["mask"].to(device)              # [B, T]
 
-        labels = batch["labels"].numpy()
+        labels = batch["labels"].cpu().numpy()
         subjects = batch["subject_ids"]
-        lengths = batch["lengths"].numpy()
+        lengths = batch["lengths"].cpu().numpy()
 
-        # Forward
-        recon = model(features, cap, mask)
-        preds = recon["recon"]        # [B, T, F]
-        targets = recon["target"]     # [B, T, F]
+        # 🔑 Forward pass
+        preds, _ = model(features, cap, mask)        # [B, T, F]
+
+        # True next-step targets
+        targets = torch.zeros_like(features)
+        targets[:, :-1] = features[:, 1:]
+        targets[:, -1] = features[:, -1]
 
         # Epoch-wise MSE
-        epoch_err = ((preds - targets) ** 2).mean(dim=2).cpu().numpy()
+        epoch_mse = ((preds - targets) ** 2).mean(dim=2).cpu().numpy()
 
         for i, sid in enumerate(subjects):
             T = lengths[i]
-            e = epoch_err[i, :T]
+            e = epoch_mse[i, :T]
             c = cap[i, :T].cpu().numpy()
 
-            results.append({
+            rows.append({
                 "subject_id": sid,
-                "label": labels[i],
+                "label": int(labels[i]),
                 "label_name": "Control" if labels[i] == 0 else "Rare",
                 "mean_error": float(np.mean(e)),
                 "std_error": float(np.std(e)),
@@ -77,10 +80,10 @@ def compute_subject_metrics(model, loader, device):
                 "p95_error": float(np.percentile(e, 95)),
                 "max_error": float(np.max(e)),
                 "cap_ratio": float(np.mean(c)),
-                "n_epochs": int(T)
+                "n_epochs": int(T),
             })
 
-    return pd.DataFrame(results)
+    return pd.DataFrame(rows)
 
 
 # =========================================================
@@ -92,22 +95,30 @@ def infer_channel(channel: str, config: Config, device):
     print(f"🔍 INFERENCE — CHANNEL: {channel}")
     print("=" * 80)
 
-    # Load features
+    # -----------------------------------------------------
+    # Load selected features
+    # -----------------------------------------------------
     feat_path = config.PHASE5_FEATURE_DIR / f"{channel}_selected_features.csv"
-    feature_names = list(np.loadtxt(feat_path, dtype=str, delimiter=",", skiprows=1))
+    feature_names = list(
+        np.loadtxt(feat_path, dtype=str, delimiter=",", skiprows=1)
+    )
 
-    # Dataset (ALL subjects)
-    csv_path = config.PHASE4_DATA_DIR / f"{channel}.csv"
+    # -----------------------------------------------------
+    # Dataset (USE SAME CLEAN DATA AS TRAINING)
+    # -----------------------------------------------------
+    csv_path = config.PHASE7_DATA_DIR / f"{channel}_clean.csv"
     dataset = TemporalEEGDataset(csv_path, feature_names, verbose=False)
 
     loader = DataLoader(
         dataset,
         batch_size=config.BATCH_SIZE,
         shuffle=False,
-        collate_fn=collate_fn
+        collate_fn=collate_fn,
     )
 
-    # Load model
+    # -----------------------------------------------------
+    # Load model + checkpoint
+    # -----------------------------------------------------
     ckpt_path = config.CHECKPOINT_DIR / f"{channel}_best.pt"
     if not ckpt_path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
@@ -117,29 +128,32 @@ def infer_channel(channel: str, config: Config, device):
         hidden_dim=config.HIDDEN_DIM,
         output_dim=config.OUTPUT_DIM,
         alpha_A_init=config.ALPHA_A_INIT,
-        alpha_B_init=config.ALPHA_B_INIT
+        alpha_B_init=config.ALPHA_B_INIT,
     ).to(device)
 
     ckpt = torch.load(ckpt_path, map_location=device)
-    #model.load_state_dict(ckpt["model_state_dict"])
-    if "model_state_dict" in ckpt:
-        state = ckpt["model_state_dict"]
-    elif "model_state" in ckpt:
-        state = ckpt["model_state"]
+
+    # 🔑 FINAL, CORRECT LOGIC
+    if isinstance(ckpt, dict) and all(isinstance(v, torch.Tensor) for v in ckpt.values()):
+        # This IS a raw state_dict
+        state_dict = ckpt
+        print("✔ Loaded raw state_dict checkpoint")
+    elif "model_state_dict" in ckpt:
+        state_dict = ckpt["model_state_dict"]
+        print("✔ Loaded wrapped model_state_dict checkpoint")
     else:
-        raise KeyError(
-            f"Checkpoint keys: {ckpt.keys()} — no model weights found"
-        )
+        raise KeyError(f"Unsupported checkpoint format: {ckpt.keys()}")
 
-    model.load_state_dict(state)
+    model.load_state_dict(state_dict, strict=True)
     model.eval()
-    print(f"✔ Loaded checkpoint (epoch {ckpt['epoch']})")
 
+    # -----------------------------------------------------
     # Inference
+    # -----------------------------------------------------
     df = compute_subject_metrics(model, loader, device)
 
     out_dir = config.OUTPUT_DIR / "inference"
-    out_dir.mkdir(exist_ok=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     out_path = out_dir / f"{channel}_subject_metrics.csv"
     df.to_csv(out_path, index=False)
@@ -150,7 +164,7 @@ def infer_channel(channel: str, config: Config, device):
 
 
 # =========================================================
-# MAIN CONTROLLER
+# MAIN
 # =========================================================
 
 def main():

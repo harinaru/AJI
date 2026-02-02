@@ -1,0 +1,4 @@
+python -m phase7_1_cap_ltc.main --all
+
+conda create -n capltc python=3.10 -y
+conda activate capltc

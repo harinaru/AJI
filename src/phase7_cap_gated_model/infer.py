@@ -5,7 +5,8 @@ CAP-Gated Temporal Normality Model
 ✔ Loads trained checkpoints (raw state_dict supported)
 ✔ Runs inference on all subjects
 ✔ Computes reconstruction-based uncertainty
-✔ Saves research-grade CSV outputs
+✔ Saves subject-level CSV
+✔ Saves epoch-level arrays for PhD-grade visualization
 """
 
 from pathlib import Path
@@ -34,30 +35,38 @@ def get_device():
 
 
 # =========================================================
-# SUBJECT-LEVEL METRICS
+# SUBJECT-LEVEL + EPOCH-LEVEL METRICS
 # =========================================================
 
 @torch.no_grad()
-def compute_subject_metrics(model, loader, device):
+def compute_subject_metrics(
+    model,
+    loader,
+    device,
+    epoch_out_dir: Path
+):
     """
     Computes next-step reconstruction error based uncertainty
+    ALSO saves epoch-level error + CAP flags for visualization
     """
     model.eval()
     rows = []
 
+    epoch_out_dir.mkdir(parents=True, exist_ok=True)
+
     for batch in tqdm(loader, desc="Inference"):
         features = batch["features"].to(device)     # [B, T, F]
         cap = batch["cap_flags"].to(device)         # [B, T]
-        mask = batch["mask"].to(device)              # [B, T]
+        mask = batch["mask"].to(device)             # [B, T]
 
         labels = batch["labels"].cpu().numpy()
         subjects = batch["subject_ids"]
         lengths = batch["lengths"].cpu().numpy()
 
-        # 🔑 Forward pass
-        preds, _ = model(features, cap, mask)        # [B, T, F]
+        # Forward
+        preds, _ = model(features, cap, mask)       # [B, T, F]
 
-        # True next-step targets
+        # Next-step targets
         targets = torch.zeros_like(features)
         targets[:, :-1] = features[:, 1:]
         targets[:, -1] = features[:, -1]
@@ -66,10 +75,20 @@ def compute_subject_metrics(model, loader, device):
         epoch_mse = ((preds - targets) ** 2).mean(dim=2).cpu().numpy()
 
         for i, sid in enumerate(subjects):
-            T = lengths[i]
+            T = int(lengths[i])
             e = epoch_mse[i, :T]
             c = cap[i, :T].cpu().numpy()
 
+            # --------------------------------------------------
+            # SAVE EPOCH-LEVEL SIGNALS (KEY FOR PhD FIGURES)
+            # --------------------------------------------------
+            np.save(epoch_out_dir / f"{sid}_epoch_errors.npy", e)
+            np.save(epoch_out_dir / f"{sid}_cap_flags.npy", c)
+            np.save(epoch_out_dir / f"{sid}_length.npy", np.array([T]))
+
+            # --------------------------------------------------
+            # SUBJECT-LEVEL SUMMARY
+            # --------------------------------------------------
             rows.append({
                 "subject_id": sid,
                 "label": int(labels[i]),
@@ -104,7 +123,7 @@ def infer_channel(channel: str, config: Config, device):
     )
 
     # -----------------------------------------------------
-    # Dataset (USE SAME CLEAN DATA AS TRAINING)
+    # Dataset (SAME CLEAN DATA AS TRAINING)
     # -----------------------------------------------------
     csv_path = config.PHASE7_DATA_DIR / f"{channel}_clean.csv"
     dataset = TemporalEEGDataset(csv_path, feature_names, verbose=False)
@@ -133,9 +152,8 @@ def infer_channel(channel: str, config: Config, device):
 
     ckpt = torch.load(ckpt_path, map_location=device)
 
-    # 🔑 FINAL, CORRECT LOGIC
+    # ✔ RAW state_dict SUPPORT (THIS FIXED YOUR ERROR)
     if isinstance(ckpt, dict) and all(isinstance(v, torch.Tensor) for v in ckpt.values()):
-        # This IS a raw state_dict
         state_dict = ckpt
         print("✔ Loaded raw state_dict checkpoint")
     elif "model_state_dict" in ckpt:
@@ -148,17 +166,29 @@ def infer_channel(channel: str, config: Config, device):
     model.eval()
 
     # -----------------------------------------------------
+    # Output directories
+    # -----------------------------------------------------
+    base_out = config.OUTPUT_DIR / "inference"
+    epoch_out = base_out / "epoch_level" / channel
+
+    base_out.mkdir(parents=True, exist_ok=True)
+    epoch_out.mkdir(parents=True, exist_ok=True)
+
+    # -----------------------------------------------------
     # Inference
     # -----------------------------------------------------
-    df = compute_subject_metrics(model, loader, device)
+    df = compute_subject_metrics(
+        model=model,
+        loader=loader,
+        device=device,
+        epoch_out_dir=epoch_out
+    )
 
-    out_dir = config.OUTPUT_DIR / "inference"
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    out_path = out_dir / f"{channel}_subject_metrics.csv"
+    out_path = base_out / f"{channel}_subject_metrics.csv"
     df.to_csv(out_path, index=False)
 
-    print(f"📁 Saved: {out_path}")
+    print(f"📁 Saved subject metrics: {out_path}")
+    print(f"📁 Saved epoch-level signals: {epoch_out}")
 
     return df
 
@@ -183,7 +213,12 @@ def main():
         all_results.append(df)
 
     summary = pd.concat(all_results, ignore_index=True)
-    summary_path = config.OUTPUT_DIR / "inference" / "summary_all_channels.csv"
+
+    summary_path = (
+        config.OUTPUT_DIR
+        / "inference"
+        / "summary_all_channels.csv"
+    )
     summary.to_csv(summary_path, index=False)
 
     print("\n📊 SUMMARY SAVED")

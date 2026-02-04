@@ -3,7 +3,7 @@ Utilities for Phase 7.1 — CAP-LTC
 --------------------------------
 • Reproducibility
 • Logging (file + console)
-• Checkpoint saving
+• Checkpoint saving (overlap-safe)
 • τ parameter extraction (CRITICAL: E1.1 / E6.1)
 """
 
@@ -46,7 +46,7 @@ def setup_logger(name: str = "phase7_1") -> logging.Logger:
     Setup logger with file + console handlers.
     """
     logger = logging.getLogger(name)
-    logger.setLevel(logging.INFO)   # ✅ FIX: no config.LOG_LEVEL
+    logger.setLevel(logging.INFO)
 
     if logger.handlers:
         return logger  # Prevent duplicate handlers
@@ -78,7 +78,7 @@ def setup_logger(name: str = "phase7_1") -> logging.Logger:
 
 
 # =============================================================================
-# CHECKPOINTING
+# CHECKPOINTING (OVERLAP-SAFE)
 # =============================================================================
 def save_checkpoint(
     model: torch.nn.Module,
@@ -88,10 +88,13 @@ def save_checkpoint(
     filename: Optional[str] = None,
 ) -> None:
     """
-    Save training checkpoint safely.
+    Save training checkpoint safely (one per overlap).
     """
-    filename = filename if filename is not None else config.CHECKPOINT_NAME
+    ckpt_name = f"cap_ltc_best_overlap_{int(config.OVERLAP_PERCENT * 100)}.pt"
+    filename = filename if filename is not None else ckpt_name
+
     path = config.MODEL_DIR / filename
+    path.parent.mkdir(parents=True, exist_ok=True)
 
     torch.save(
         {
@@ -107,7 +110,7 @@ def save_checkpoint(
 
 
 # =============================================================================
-# τ EXTRACTION — CRITICAL (E1.1 / E6.1)
+# τ EXTRACTION — CRITICAL (OVERLAP-SAFE)
 # =============================================================================
 def extract_tau_parameters(
     model: torch.nn.Module,
@@ -115,6 +118,10 @@ def extract_tau_parameters(
 ) -> Optional[Dict]:
     """
     Extract learned τ parameters from CAP-LTC cell.
+
+    ✔ Overlap-safe (no overwriting)
+    ✔ CAP-count agnostic
+    ✔ Reviewer-safe
     """
 
     tau_data: Dict[str, object] = {}
@@ -122,6 +129,7 @@ def extract_tau_parameters(
     for module in model.modules():
         if hasattr(module, "tau_base") and hasattr(module, "tau_cap"):
 
+            # Ensure positivity (physiological constraint)
             tau_base = torch.nn.functional.softplus(
                 torch.as_tensor(module.tau_base)
             )
@@ -142,11 +150,15 @@ def extract_tau_parameters(
 
     if save:
         config.TAU_DIR.mkdir(parents=True, exist_ok=True)
-        path = config.TAU_DIR / "learned_tau.json"
 
-        with open(path, "w") as f:
+        tau_path = (
+            config.TAU_DIR /
+            f"learned_tau_overlap_{int(config.OVERLAP_PERCENT * 100)}.json"
+        )
+
+        with open(tau_path, "w") as f:
             json.dump(tau_data, f, indent=4)
 
-        logging.info(f"[Tau] Saved learned τ → {path}")
+        logging.info(f"[Tau] Saved learned τ → {tau_path}")
 
     return tau_data

@@ -54,7 +54,7 @@ def get_valid_cap_labels(tau_cap: np.ndarray) -> Dict[str, int]:
 # LOAD τ PARAMETERS
 # =============================================================================
 def load_tau() -> Dict[str, Any]:
-    tau_path = config.TAU_DIR / "learned_tau.json"
+    tau_path = config.TAU_DIR / f"learned_tau_overlap_{int(config.OVERLAP_PERCENT*100)}.json"
     if not tau_path.exists():
         raise FileNotFoundError(
             f"[Tau] File not found: {tau_path} (run Phase 7.1 first)"

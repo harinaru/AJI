@@ -1,10 +1,11 @@
 """
-Phase 7.3 — Ablation Studies
-----------------------------
+Phase 7.3 — Ablation Studies (FINAL, SAFE)
+------------------------------------------
 ✔ Full CAP-LTC
 ✔ LTC without CAP modulation
 ✔ LSTM baseline
-✔ Reviewer-safe, explicit comparisons
+✔ Window → scalar → dataset aggregation
+✔ Overlap-agnostic
 """
 
 import logging
@@ -19,20 +20,15 @@ from .metrics import reconstruction_error
 
 
 # =============================================================================
-# BASELINE — SIMPLE LSTM AUTOENCODER (VARIABLE CHANNEL SAFE)
+# BASELINE — SIMPLE LSTM AUTOENCODER
 # =============================================================================
 class LSTM_AE(nn.Module):
     """
-    Baseline LSTM Autoencoder
-
-    ✔ Variable number of channels
-    ✔ No hard-coded N_CHANNELS
-    ✔ Fair ablation vs CAP-LTC
+    Baseline LSTM Autoencoder (variable-channel safe)
     """
 
     def __init__(self):
         super().__init__()
-
         F = config.FEATURE_DIM
         H = config.LTC_HIDDEN
 
@@ -41,17 +37,15 @@ class LSTM_AE(nn.Module):
             hidden_size=H,
             batch_first=True,
         )
-
         self.decoder = nn.Linear(H, F)
 
     def forward(self, x: torch.Tensor):
         """
-        Args:
-            x: (B, T, C, F)
+        x: [B, T, C, F]
         """
         B, T, C, F = x.shape
-
         x = x.view(B * C, T, F)
+
         z, _ = self.encoder(x)
         recon = self.decoder(z)
 
@@ -60,12 +54,10 @@ class LSTM_AE(nn.Module):
 
 
 # =============================================================================
-# LOAD DATA (SHARED)
+# DATA LOADER
 # =============================================================================
 def get_loader():
-    dataset = TemporalEEGDataset(
-        config.OVERLAP_PERCENT   # ONLY ONE ARG
-    )
+    dataset = TemporalEEGDataset(overlap=config.OVERLAP_PERCENT)
 
     return DataLoader(
         dataset,
@@ -75,28 +67,38 @@ def get_loader():
         num_workers=config.NUM_WORKERS,
     )
 
+
 # =============================================================================
-# EVALUATION LOOP
+# EVALUATION (SAFE SCALAR AGGREGATION)
 # =============================================================================
+@torch.no_grad()
 def evaluate(model: nn.Module, loader: DataLoader, device: torch.device) -> float:
     model.eval()
-    errors = []
+    window_errors = []
 
-    with torch.no_grad():
-        for batch in loader:
-            x = batch["features"].to(device)
-            cap = batch["cap"].to(device)
-            mask = batch["mask"].to(device)
+    for batch in loader:
+        x = batch["features"].to(device)
+        cap = batch["cap"].to(device)
+        mask = batch["mask"].to(device)
 
+        # Forward
+        if isinstance(model, CAP_LTC_Model):
             recon, _ = model(x, cap, mask)
-            err = reconstruction_error(recon, x, mask)
-            errors.append(err)
+        else:
+            recon = model(x)
 
-    return float(torch.mean(torch.tensor(errors)))
+        # [B, T] error
+        err_ts = reconstruction_error(recon, x, mask)
+
+        # reduce per window → scalar
+        per_window = err_ts.sum(dim=1) / mask.sum(dim=1).clamp(min=1)
+        window_errors.extend(per_window.cpu().tolist())
+
+    return float(sum(window_errors) / len(window_errors))
 
 
 # =============================================================================
-# MAIN ABLATION RUNNER
+# MAIN ABLATION
 # =============================================================================
 def run_ablation() -> None:
     logging.basicConfig(level=logging.INFO)
@@ -108,18 +110,18 @@ def run_ablation() -> None:
     # 1. FULL CAP-LTC
     # --------------------------------------------------
     cap_ltc = CAP_LTC_Model().to(device)
-    cap_ltc.load_state_dict(
-        torch.load(
-            config.MODEL_DIR / config.CHECKPOINT_NAME,
-            map_location=device,
-        )["model_state"]
+    ckpt_name = f"cap_ltc_best_overlap_{int(config.OVERLAP_PERCENT * 100)}.pt"
+    ckpt = torch.load(
+        config.MODEL_DIR / ckpt_name,
+        map_location=device,
     )
+    cap_ltc.load_state_dict(ckpt["model_state"])
 
     err_cap_ltc = evaluate(cap_ltc, loader, device)
     logging.info(f"[Ablation] CAP-LTC error = {err_cap_ltc:.6f}")
 
     # --------------------------------------------------
-    # 2. LTC WITHOUT CAP MODULATION (τ_cap = 0)
+    # 2. LTC WITHOUT CAP MODULATION
     # --------------------------------------------------
     ltc_no_cap = CAP_LTC_Model().to(device)
     ltc_no_cap.load_state_dict(cap_ltc.state_dict(), strict=False)

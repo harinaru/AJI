@@ -167,6 +167,7 @@ def run_training() -> None:
         # -------------------------------------------------------------
         # CHECKPOINT + EARLY STOPPING
         # -------------------------------------------------------------
+        ckpt_name = f"cap_ltc_best_overlap_{int(config.OVERLAP_PERCENT * 100)}.pt"
         if train_loss < best_loss - 1e-6:
             best_loss = train_loss
             patience_counter = 0
@@ -176,7 +177,7 @@ def run_training() -> None:
                 optimizer=optimizer,
                 epoch=epoch,
                 loss=train_loss,
-                filename=config.CHECKPOINT_NAME,
+                filename=ckpt_name,
             )
 
             logger.info(

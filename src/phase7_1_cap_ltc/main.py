@@ -88,33 +88,44 @@ def main():
         # ---------------------------
         # Phase 7.1 → 7.3 — PER OVERLAP
         # ---------------------------
+                # ---------------------------
+        # Phase 7.1 & 7.2 & Inference — PER OVERLAP
+        # ---------------------------
         for overlap in config.OVERLAPS:
             print(f"\n▶▶▶ RUNNING OVERLAP = {int(overlap * 100)}%")
 
             # Update global config safely
             config.OVERLAP_PERCENT = overlap
 
+            # -----------------------
             # Training
+            # -----------------------
             print("▶ Phase 7.1 — TRAINING")
             run_training()
 
+            # -----------------------
             # τ analysis
+            # -----------------------
             print("▶ Phase 7.2 — τ ANALYSIS")
             run_tau_analysis()
 
-            # Ablation
-            print("▶ Phase 7.3 — ABLATION")
-            run_ablation()
-
+            # -----------------------
             # Inference
+            # -----------------------
             print("▶ INFERENCE")
             run_inference()
 
             print(f"✔ Overlap {int(overlap * 100)}% completed")
 
-        # --------------------------
-        # VISUALIZATION
-        # --------------------------
+        # ---------------------------
+        # Phase 7.3 — ABLATION (ONCE)
+        # ---------------------------
+        print("▶ Phase 7.3 — ABLATION")
+        run_ablation()
+
+        # ---------------------------
+        # VISUALIZATION (ONCE)
+        # ---------------------------
         print("\n▶▶ VISUALIZATIONS")
         run_all_visualizations()
         print("✔ Visualizations completed")

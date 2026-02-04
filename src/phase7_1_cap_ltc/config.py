@@ -45,18 +45,19 @@ OVERLAP_PERCENT = 0.75       # default/main experiment
 # =============================================================================
 # TRAINING
 # =============================================================================
-TRAIN_NORMAL_ONLY = True     # one-class learning (core novelty)
+TRAIN_NORMAL_ONLY = True    
+ # one-class learning (core novelty)
 BATCH_SIZE = 8
 LEARNING_RATE = 1e-3
 WEIGHT_DECAY = 1e-4
-MAX_EPOCHS = 25              # upper bound (early stopping will stop earlier)
+MAX_EPOCHS = 25             # upper bound (early stopping will stop earlier)
 SEED = 42                    # fixed for reproducibility (reported in paper)
 
 # =============================================================================
 # EARLY STOPPING (CRITICAL FOR CPU TRAINING)
 # =============================================================================
 EARLY_STOPPING = True
-EARLY_STOPPING_PATIENCE = 5  # stop if no improvement for 5 epochs
+EARLY_STOPPING_PATIENCE = 3  # stop if no improvement for 5 epochs
 MIN_DELTA = 1e-4             # minimum loss improvement
 
 # =============================================================================
@@ -101,7 +102,7 @@ THRESHOLD_PERCENTILE = 95    # learned from NORMAL windows only
 # =============================================================================
 # OUTPUTS
 # =============================================================================
-CHECKPOINT_NAME = "cap_ltc_best.pt"
+#CHECKPOINT_NAME = "cap_ltc_best.pt"
 
 MODEL_DIR = RESULTS_DIR / "models"
 TAU_DIR = RESULTS_DIR / "tau"

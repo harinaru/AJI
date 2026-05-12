@@ -81,6 +81,7 @@ class Config:
     TRAIN_RATIO = 0.8         # Controls only
     VAL_RATIO = 0.2           # Controls only
     RARE_USED_ONLY_FOR_TEST = True
+    OVERLAP=0.5
 
     # ==========================================================
     # 7. RANDOM SEED (REPRODUCIBILITY)

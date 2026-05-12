@@ -1,190 +1,126 @@
-"""
-Phase 7 — Temporal EEG Dataset with CAP alignment
-
-✔ Subject-wise sequences
-✔ Temporal order preserved
-✔ CAP-aligned
-✔ Variable-length safe
-✔ Padding + masking
-✔ CONTROL-ONLY FEATURE NORMALIZATION (CRITICAL FIX)
-✔ Journal-grade & stable
-"""
-
+import sys
 from pathlib import Path
-from typing import List, Dict, Tuple
 
-import numpy as np
-import pandas as pd
+ROOT = Path(__file__).resolve().parents[3]
+if str(ROOT) not in sys.path:
+    sys.path.append(str(ROOT))
+
 import torch
-from torch.utils.data import Dataset
-from torch.nn.utils.rnn import pad_sequence
+import pandas as pd
+import numpy as np
+from tqdm import tqdm
+from captum.attr import IntegratedGradients
+
+from src.phase7_cap_gated_model.dataset import TemporalEEGDataset, collate_fn
+from src.phase7_cap_gated_model.model import CapGatedModel
+from src.phase7_cap_gated_model.config import Config
 
 
-class TemporalEEGDataset(Dataset):
-    """
-    One dataset sample = one subject (variable-length EEG sequence)
-    """
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    MIN_VALID_EPOCHS = 1
 
-    def __init__(
-        self,
-        csv_path: Path,
-        feature_names: List[str],
-        allowed_subjects: List[str] | None = None,
-        verbose: bool = True,
-    ):
-        self.csv_path = Path(csv_path)
-        self.feature_names = feature_names
-        self.verbose = verbose
+def compute_reconstruction_error(x, recon, mask):
+    mse = (x - recon) ** 2
+    mse = mse.mean(dim=2)  # mean over features
+    mse = mse * mask
+    return mse.sum(dim=1) / mask.sum(dim=1)
 
-        df = pd.read_csv(self.csv_path)
 
-        if allowed_subjects is not None:
-            df = df.loc[df["subject"].isin(allowed_subjects)].copy()
+def compute_cap_ratio(cap_flags, mask):
+    cap_flags = cap_flags * mask
+    return cap_flags.sum(dim=1) / mask.sum(dim=1)
 
-        required_cols = set(feature_names) | {"subject", "label"}
-        missing = required_cols - set(df.columns)
-        if missing:
-            raise ValueError(f"Missing required columns: {missing}")
 
-        if "cap_present" not in df.columns:
-            df["cap_present"] = 0
+def run_epoch_metrics():
 
-        self.samples: List[Dict] = []
+    print("\n========== SAVING EPOCH METRICS ==========")
 
-        # --------------------------------------------------
-        # Build subject-wise sequences
-        # --------------------------------------------------
-        for subject_id, group in df.groupby("subject"):
-            g = group.copy()
+    dataset = TemporalEEGDataset(
+        csv_path=Config.DATA_PATH,
+        feature_names=Config.FEATURE_COLUMNS,
+    )
 
-            if "epoch_idx" in g.columns:
-                g = g.sort_values("epoch_idx")
+    loader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=Config.BATCH_SIZE,
+        shuffle=False,
+        collate_fn=collate_fn
+    )
 
-            X = g[self.feature_names].to_numpy(dtype=np.float32)
-            cap = g["cap_present"].to_numpy(dtype=np.float32)
-            label = int(g["label"].iloc[0])
+    model = CapGatedModel(Config)
+    ckpt = torch.load(Config.MODEL_PATH, map_location=DEVICE)
 
-            valid_mask = (
-                ~np.isnan(X).any(axis=1)
-                & ~np.isinf(X).any(axis=1)
+    if "model_state" in ckpt:
+        model.load_state_dict(ckpt["model_state"])
+    else:
+        model.load_state_dict(ckpt)
+
+    model.to(DEVICE)
+    model.eval()
+
+    ig = IntegratedGradients(model)
+
+    all_rows = []
+
+    with torch.no_grad():
+
+        for batch in tqdm(loader):
+
+            x = batch["features"].to(DEVICE)
+            cap_flags = batch["cap_flags"].to(DEVICE)
+            mask = batch["mask"].to(DEVICE)
+
+            labels = batch["labels"].cpu().numpy()
+            subject_ids = batch["subject_ids"]
+
+            recon, tau, z = model(
+                x,
+                cap_flags,
+                return_tau=True,
+                return_latent=True
             )
 
-            if valid_mask.sum() < self.MIN_VALID_EPOCHS:
-                if self.verbose:
-                    print(
-                        f"⚠️ Skipping {subject_id} "
-                        f"({valid_mask.sum()}/{len(X)} valid epochs)"
-                    )
-                continue
+            error = compute_reconstruction_error(x, recon, mask)
+            cap_ratio = compute_cap_ratio(cap_flags, mask)
 
-            X = X[valid_mask]
-            cap = cap[valid_mask]
+            error = error.cpu().numpy()
+            cap_ratio = cap_ratio.cpu().numpy()
+            tau = tau.detach().cpu().numpy()
+            z = z.detach().cpu().numpy()
 
-            self.samples.append(
-                {
-                    "subject_id": subject_id,
-                    "features": torch.from_numpy(X),    # [T, F]
-                    "cap_flags": torch.from_numpy(cap), # [T]
-                    "length": X.shape[0],
-                    "label": label,
+            attr = ig.attribute(
+                inputs=x,
+                additional_forward_args=(cap_flags,),
+                target=None
+            )
+
+            ig_sum = attr.sum(dim=(1, 2)).detach().cpu().numpy()
+
+            for i in range(x.size(0)):
+
+                row = {
+                    "subject_id": subject_ids[i],
+                    "label": int(labels[i]),
+                    "reconstruction_error": float(error[i]),
+                    "cap_ratio": float(cap_ratio[i]),
+                    "tau": float(tau[i]),
+                    "ig_sum": float(ig_sum[i]),
                 }
-            )
 
-        if not self.samples:
-            if self.verbose:
-                print(f"\n📊 Dataset loaded: {self.csv_path.name}")
-                print("⚠️ No valid subjects in this channel")
-            return
+                for j in range(z.shape[1]):
+                    row[f"z_{j}"] = float(z[i, j])
 
-        # ==================================================
-        # 🔥 CRITICAL FIX — CONTROL-ONLY NORMALIZATION
-        # ==================================================
+                all_rows.append(row)
 
-        control_features = [
-            s["features"] for s in self.samples if s["label"] == 0
-        ]
+    df = pd.DataFrame(all_rows)
 
-        if len(control_features) == 0:
-            raise RuntimeError("No control subjects found for normalization.")
+    output_path = Path(Config.RESULTS_DIR) / "epoch_metrics.csv"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(output_path, index=False)
 
-        all_control_feats = torch.cat(control_features, dim=0)  # [N, F]
-
-        self.feature_mean = all_control_feats.mean(dim=0)
-        self.feature_std = all_control_feats.std(dim=0)
-        self.feature_std[self.feature_std < 1e-6] = 1.0
-
-        # Apply normalization to ALL samples
-        for s in self.samples:
-            s["features"] = (s["features"] - self.feature_mean) / self.feature_std
-
-        if self.verbose:
-            self._print_summary()
-
-    def _print_summary(self) -> None:
-        lengths = [s["length"] for s in self.samples]
-        labels = [s["label"] for s in self.samples]
-
-        print(f"\n📊 Dataset loaded: {self.csv_path.name}")
-        print(f"Subjects       : {len(self.samples)}")
-        print(f"Controls       : {labels.count(0)}")
-        print(f"Rare disorders : {labels.count(1)}")
-        print(
-            f"Seq length     : min={min(lengths)}, "
-            f"max={max(lengths)}, mean={np.mean(lengths):.1f}"
-        )
-
-    def __len__(self) -> int:
-        return len(self.samples)
-
-    def __getitem__(self, idx: int):
-        s = self.samples[idx]
-        return (
-            s["features"],     # [T, F] (NORMALIZED)
-            s["cap_flags"],    # [T]
-            s["length"],       # int
-            s["label"],        # int
-            s["subject_id"],   # str
-        )
+    print("Saved to:", output_path)
+    print("Rows:", len(df))
 
 
-# ======================================================
-# COLLATE FUNCTION
-# ======================================================
-
-def collate_fn(
-    batch: List[
-        Tuple[
-            torch.Tensor,  # features [T, F]
-            torch.Tensor,  # cap_flags [T]
-            int,
-            int,
-            str,
-        ]
-    ]
-) -> Dict[str, torch.Tensor | List[str]]:
-
-    features_t, cap_t, lengths_t, labels_t, subject_ids = zip(*batch)
-
-    features_pad = pad_sequence(
-        list(features_t), batch_first=True, padding_value=0.0
-    )
-
-    cap_pad = pad_sequence(
-        list(cap_t), batch_first=True, padding_value=0.0
-    )
-
-    lengths_tensor = torch.tensor(lengths_t, dtype=torch.long)
-    T_max = features_pad.size(1)
-
-    mask = torch.arange(T_max)[None, :] < lengths_tensor[:, None]
-
-    return {
-        "features": features_pad,
-        "cap_flags": cap_pad,
-        "mask": mask,
-        "lengths": lengths_tensor,
-        "labels": torch.tensor(labels_t),
-        "subject_ids": list(subject_ids),
-    }
+if __name__ == "__main__":
+    run_epoch_metrics()

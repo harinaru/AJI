@@ -9,3 +9,6 @@ artifact_thresh_uV: 200.0
 epoch_length_s: 30
 epoch_step_s: 5
 prediction_horizon_s: 30
+OVERLAP_PERCENT: 0.5
+SEEDS: [42, 49, 56]
+TRAIN_NORMAL_ONLY = False

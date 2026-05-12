@@ -1,0 +1,76 @@
+"""
+Debug ONE SleepTech .st file.
+
+Purpose:
+--------
+Print raw contents exactly as stored
+inside the .edf.st annotation file.
+
+This helps redesign the parser correctly.
+"""
+
+from pathlib import Path
+
+
+# =============================================================================
+# CHANGE THIS
+# =============================================================================
+ST_FILE = Path(
+    r"data/annotations/sdb4.edf.st"
+)
+
+
+# =============================================================================
+# MAIN
+# =============================================================================
+def main():
+
+    print("=" * 80)
+    print("ST FILE DEBUG")
+    print("=" * 80)
+
+    print(f"\nFILE: {ST_FILE}\n")
+
+    if not ST_FILE.exists():
+
+        print("[ERROR] FILE NOT FOUND")
+
+        return
+
+    # =========================================================================
+    # READ RAW
+    # =========================================================================
+    with open(
+        ST_FILE,
+        "r",
+        encoding="utf-8",
+        errors="ignore",
+    ) as f:
+
+        lines = f.readlines()
+
+    print(f"TOTAL LINES: {len(lines)}")
+
+    print("\n")
+    print("=" * 80)
+    print("FIRST 50 RAW LINES")
+    print("=" * 80)
+
+    for idx, line in enumerate(lines[:50]):
+
+        print(
+            f"{idx+1:03d} | {repr(line)}"
+        )
+
+    print("\n")
+    print("=" * 80)
+    print("END DEBUG")
+    print("=" * 80)
+
+
+# =============================================================================
+# ENTRY
+# =============================================================================
+if __name__ == "__main__":
+
+    main()

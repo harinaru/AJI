@@ -4,3 +4,6 @@ random_seed: 42
 data_root: data/
 results_root: results/
 log_level: INFO
+SEEDS: [42, 49, 56]
+TAU_MIN = 0.05
+TAU_MAX = 10.0

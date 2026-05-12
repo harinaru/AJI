@@ -53,6 +53,9 @@ WEIGHT_DECAY = 1e-4
 MAX_EPOCHS = 25             # upper bound (early stopping will stop earlier)
 SEED = 42                    # fixed for reproducibility (reported in paper)
 
+# Multi-seed reproducibility (used by `multi_seed.py`)
+SEEDS = [42, 49, 56]
+
 # =============================================================================
 # EARLY STOPPING (CRITICAL FOR CPU TRAINING)
 # =============================================================================
@@ -93,6 +96,11 @@ TAU_CAP_INIT = [
    -0.5,   # A3
     0.1,   # A? (uncertain CAP)
 ]
+
+# Numerical stability bounds for τ(t) after softplus.
+# Keep these aligned with `src/config/global_config.yaml` if used elsewhere.
+TAU_MIN = 0.05
+TAU_MAX = 10.0
 
 # =============================================================================
 # INFERENCE / THRESHOLDING

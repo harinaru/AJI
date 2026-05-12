@@ -1,15 +1,6 @@
-"""
-Phase 7.x — Inference & Subject-Level Scoring (FINAL, SAFE)
-----------------------------------------------------------
-✔ Subject-level instability profiling
-✔ Saves window-level scores + labels
-✔ Overlap-aware directory structure
-✔ Visualization-compatible
-"""
+# src/phase7_1_cap_ltc/infer.py
 
-import logging
-from pathlib import Path
-from typing import List, Dict
+import random
 
 import numpy as np
 import pandas as pd
@@ -19,119 +10,189 @@ from tqdm import tqdm
 
 from . import config
 from .dataset import TemporalEEGDataset, collate_fn
-from .metrics import reconstruction_error, delta_error, instability_index
+from .metrics import reconstruction_error, delta_error
 from .model.cap_ltc_model import CAP_LTC_Model
 
 
 # =============================================================================
-# SUBJECT-LEVEL INFERENCE
+# SUBJECT SPLIT
+# =============================================================================
+def get_test_subjects(overlap_dir):
+
+    subjects = sorted([
+        d.name.lower()
+        for d in overlap_dir.iterdir()
+        if d.is_dir()
+    ])
+
+    normal_subjects = [
+        s for s in subjects
+        if s.startswith("n")
+    ]
+
+    disorder_subjects = [
+        s for s in subjects
+        if not s.startswith("n")
+    ]
+
+    random.seed(config.SEED)
+
+    random.shuffle(normal_subjects)
+
+    n_total = len(normal_subjects)
+
+    n_train = int(0.7 * n_total)
+    n_val = int(0.15 * n_total)
+
+    heldout_normals = normal_subjects[n_train+n_val:]
+
+    return heldout_normals + disorder_subjects
+
+
+# =============================================================================
+# INFERENCE
 # =============================================================================
 @torch.no_grad()
-def infer_subjects(model, loader, device):
-    model.eval()
-
-    rows: List[Dict] = []
-    all_scores = []
-    all_labels = []
-
-    for batch in tqdm(loader, desc="[Inference]", ncols=100):
-        x = batch["features"].to(device)
-        cap = batch["cap"].to(device)
-        mask = batch["mask"].to(device)
-
-        subject_ids = batch["subject_ids"]
-        labels = batch["labels"]
-        lengths = batch["lengths"]
-
-        recon, _ = model(x, cap, mask)
-
-        err_ts = reconstruction_error(recon, x, mask)
-        d_err_ts = delta_error(err_ts, mask)
-
-        for i, sid in enumerate(subject_ids):
-            L = lengths[i].item()
-            err = err_ts[i, :L]
-            d_err = d_err_ts[i, :L-1]
-
-            metrics = instability_index(
-                err[None, :],
-                d_err[None, :],
-                mask[i, :L][None, :],
-            )
-
-            instability = metrics["mean_error"] + metrics["mean_delta"]
-
-            rows.append({
-                "subject_id": sid,
-                "label": int(labels[i]),
-                "label_name": "Control" if labels[i] == 0 else "Disorder",
-                "n_windows": int(L),
-                "mean_error": metrics["mean_error"],
-                "p90_error": metrics["p90_error"],
-                "mean_delta": metrics["mean_delta"],
-                "p90_delta": metrics["p90_delta"],
-                "instability_index": instability,
-            })
-
-            # window-level score for ROC
-            all_scores.append(instability)
-            all_labels.append(int(labels[i]))
-
-    return pd.DataFrame(rows), np.array(all_scores), np.array(all_labels)
-
-
-# =============================================================================
-# MAIN INFERENCE RUNNER
-# =============================================================================
 def run_inference():
-    logging.basicConfig(level=logging.INFO)
+
     device = torch.device(config.DEVICE)
 
-    overlap_pct = int(config.OVERLAP_PERCENT * 100)
+    overlap = int(config.OVERLAP_PERCENT * 100)
 
-    # -----------------------------
-    # LOAD MODEL
-    # -----------------------------
-    ckpt = config.MODEL_DIR / f"cap_ltc_best_overlap_{overlap_pct}.pt"
-    if not ckpt.exists():
-        raise FileNotFoundError(f"Missing checkpoint: {ckpt}")
+    overlap_dir = (
+        config.DATA_DIR /
+        f"overlap_{overlap}"
+    )
 
+    test_subjects = get_test_subjects(overlap_dir)
+
+    # -------------------------------------------------------------------------
+    # MODEL
+    # -------------------------------------------------------------------------
     model = CAP_LTC_Model().to(device)
-    model.load_state_dict(torch.load(ckpt, map_location=device)["model_state"])
+
+    ckpt = torch.load(
+        config.MODEL_DIR /
+        f"cap_ltc_best_overlap_{overlap}.pt",
+        map_location=device,
+    )
+
+    model.load_state_dict(ckpt["model_state"])
+
     model.eval()
 
-    logging.info(f"[Inference] Loaded model → {ckpt}")
+    # -------------------------------------------------------------------------
+    # DATASET
+    # -------------------------------------------------------------------------
+    dataset = TemporalEEGDataset(
+        overlap=config.OVERLAP_PERCENT,
+        allowed_subjects=test_subjects,
+    )
 
-    # -----------------------------
-    # DATA
-    # -----------------------------
-    dataset = TemporalEEGDataset(overlap=config.OVERLAP_PERCENT)
     loader = DataLoader(
         dataset,
         batch_size=config.BATCH_SIZE,
         shuffle=False,
         collate_fn=collate_fn,
-        num_workers=config.NUM_WORKERS,
     )
 
-    # -----------------------------
-    # RUN
-    # -----------------------------
-    df, scores, labels = infer_subjects(model, loader, device)
+    subj_rows = []
+    win_rows = []
 
-    # -----------------------------
-    # SAVE (OVERLAP SAFE)
-    # -----------------------------
-    out_dir = config.RESULTS_DIR / "inference" / f"overlap_{overlap_pct}"
-    out_dir.mkdir(parents=True, exist_ok=True)
+    # -------------------------------------------------------------------------
+    # INFERENCE LOOP
+    # -------------------------------------------------------------------------
+    for batch in tqdm(loader, desc="Inference"):
 
-    df.to_csv(out_dir / "subject_level_metrics.csv", index=False)
-    np.save(out_dir / "scores_labels.npy", np.array([scores, labels], dtype=object))
+        x = batch["features"].to(device)
+        cap = batch["cap"].to(device)
+        mask = batch["mask"].to(device)
 
-    logging.info(f"[Inference] Saved → {out_dir}")
-    logging.info(df.groupby("label_name")["instability_index"].mean())
+        labels = batch["labels"]
+        sids = batch["subject_ids"]
+        lengths = batch["lengths"]
 
-    logging.info("[Inference] COMPLETED")
+        recon, latent = model(x, cap, mask)
+
+        err = reconstruction_error(recon, x, mask)
+
+        derr = delta_error(err, mask)
+
+        for i, sid in enumerate(sids):
+
+            L = lengths[i].item()
+
+            e = err[i, :L].cpu()
+
+            d = derr[i, :L-1].cpu()
+
+            label = labels[i].item()
+
+            label_name = (
+                "Control"
+                if label == 0
+                else "Disorder"
+            )
+
+            subj_rows.append({
+                "subject_id": sid,
+                "label": label,
+                "label_name": label_name,
+                "mean_error": e.mean().item(),
+                "mean_delta": d.mean().item(),
+                "instability_index": d.std().item(),
+                "p90_error": torch.quantile(e, 0.9).item(),
+                "p90_delta": torch.quantile(d, 0.9).item(),
+            })
+
+            for t in range(L):
+
+                win_rows.append({
+                    "subject_id": sid,
+                    "window_idx": t,
+                    "cap_state": int(cap[i, t].item()),
+                    "reconstruction_error": e[t].item(),
+                    "delta_error": (
+                        d[t].item()
+                        if t < L - 1
+                        else np.nan
+                    ),
+                })
+
+    # -------------------------------------------------------------------------
+    # SAVE
+    # -------------------------------------------------------------------------
+    out = (
+        config.RESULTS_DIR /
+        "inference" /
+        f"overlap_{overlap}"
+    )
+
+    out.mkdir(parents=True, exist_ok=True)
+
+    subj_df = pd.DataFrame(subj_rows)
+
+    win_df = pd.DataFrame(win_rows)
+
+    subj_df.to_csv(
+        out / "subject_level_metrics.csv",
+        index=False
+    )
+
+    win_df.to_csv(
+        out / "window_level_metrics.csv",
+        index=False
+    )
+
+    np.save(
+        out / "scores_labels.npy",
+        np.array([
+            subj_df["instability_index"].to_numpy(),
+            subj_df["label"].to_numpy(),
+        ], dtype=object)
+    )
+
+    print("✅ INFERENCE COMPLETE")
 
 
 if __name__ == "__main__":

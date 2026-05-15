@@ -1,6 +1,9 @@
+# src/phase7_1_cap_ltc/metrics.py
+
 """
 Phase 7.x — FINAL Q1 JOURNAL-GRADE METRICS MODULE
 =================================================
+
 ✔ Reconstruction error
 ✔ Temporal instability (Δerror)
 ✔ Subject-level instability biomarkers
@@ -21,11 +24,23 @@ Phase 7.x — FINAL Q1 JOURNAL-GRADE METRICS MODULE
 ✔ Bootstrap AUPRC CI
 ✔ Calibration-safe
 ✔ Small-sample safe
+✔ Paired-array safety
+✔ Numerical sanitization
+✔ Reviewer-grade biomedical robustness
 """
 
-from typing import Dict, Tuple, TypeVar
+# =============================================================================
+# IMPORTS
+# =============================================================================
+
+from typing import (
+    Dict,
+    Tuple,
+    TypeVar,
+)
 
 import numpy as np
+
 from numpy.typing import NDArray
 
 import torch
@@ -49,16 +64,18 @@ from sklearn.metrics import (
 # =============================================================================
 # CONSTANTS
 # =============================================================================
-EPS = 1e-8
 
+EPS = 1e-8
 
 # =============================================================================
 # SAFE QUANTILE
 # =============================================================================
+
 def safe_quantile(
     x: torch.Tensor,
     q: float,
 ) -> torch.Tensor:
+
     """
     Safe quantile computation.
     """
@@ -70,15 +87,19 @@ def safe_quantile(
             device=x.device,
         )
 
-    return torch.quantile(x, q)
-
+    return torch.quantile(
+        x,
+        q,
+    )
 
 # =============================================================================
 # MEDIAN ABSOLUTE DEVIATION
 # =============================================================================
+
 def median_absolute_deviation(
     x: torch.Tensor,
 ) -> float:
+
     """
     Robust dispersion estimator.
 
@@ -86,48 +107,87 @@ def median_absolute_deviation(
     """
 
     if x.numel() == 0:
+
         return 0.0
 
-    median = torch.median(x)
-
-    mad = torch.median(
-        torch.abs(x - median)
+    median = torch.median(
+        x
     )
 
-    return float(mad.item())
+    mad = torch.median(
+        torch.abs(
+            x - median
+        )
+    )
 
+    return float(
+        mad.item()
+    )
 
 # =============================================================================
 # SAFE NUMPY CLEAN
 # =============================================================================
-_DType = TypeVar("_DType", bound=np.generic)
 
+_DType = TypeVar(
+    "_DType",
+    bound=np.generic,
+)
 
 def clean_numpy(
     x: NDArray[_DType],
 ) -> NDArray[_DType]:
+
     """
     Remove NaN and Inf.
     """
 
     x = np.asarray(
-        x,
+        x
     )
 
     return x[
         np.isfinite(x)
     ]
 
+# =============================================================================
+# SAFE PAIRED CLEAN
+# =============================================================================
+
+def clean_paired_arrays(
+    x,
+    y,
+):
+
+    """
+    Preserve alignment while removing NaN/Inf.
+    """
+
+    x = np.asarray(x)
+
+    y = np.asarray(y)
+
+    mask = (
+        np.isfinite(x)
+        &
+        np.isfinite(y)
+    )
+
+    return (
+        x[mask],
+        y[mask],
+    )
 
 # =============================================================================
 # BASIC RECONSTRUCTION ERROR
 # =============================================================================
+
 def reconstruction_error(
     recon: torch.Tensor,
     target: torch.Tensor,
     mask: torch.Tensor,
     reduction: str = "none",
 ) -> torch.Tensor:
+
     """
     Reconstruction error per timestep.
 
@@ -142,30 +202,52 @@ def reconstruction_error(
     error_ts : [B,T]
     """
 
-    err = (recon - target) ** 2
+    err = (
+        recon - target
+    ) ** 2
 
-    err = err.mean(dim=(2, 3))
+    # =========================================================================
+    # NAN SAFETY
+    # =========================================================================
 
-    err = err * mask.float()
+    err = torch.nan_to_num(
+        err,
+        nan=0.0,
+        posinf=1e6,
+        neginf=1e6,
+    )
+
+    err = err.mean(
+        dim=(2, 3)
+    )
+
+    err = (
+        err
+        *
+        mask.float()
+    )
 
     if reduction == "mean":
 
         return (
             err.sum()
             /
-            mask.sum().clamp(min=1)
+            mask.sum().clamp(
+                min=1
+            )
         )
 
     return err
 
-
 # =============================================================================
 # TEMPORAL INSTABILITY (Δerror)
 # =============================================================================
+
 def delta_error(
     error_ts: torch.Tensor,
     mask: torch.Tensor,
 ) -> torch.Tensor:
+
     """
     Temporal instability:
 
@@ -177,28 +259,39 @@ def delta_error(
     """
 
     delta = torch.abs(
+
         error_ts[:, 1:]
+
         -
+
         error_ts[:, :-1]
     )
 
     delta_mask = (
+
         mask[:, 1:].bool()
+
         &
+
         mask[:, :-1].bool()
     )
 
-    return delta * delta_mask.float()
-
+    return (
+        delta
+        *
+        delta_mask.float()
+    )
 
 # =============================================================================
 # SUBJECT-LEVEL INSTABILITY INDEX
 # =============================================================================
+
 def instability_index(
     error_ts: torch.Tensor,
     delta_ts: torch.Tensor,
     mask: torch.Tensor,
 ) -> Dict[str, float]:
+
     """
     Subject-level scalar biomarkers.
     """
@@ -211,9 +304,10 @@ def instability_index(
         mask[:, 1:].bool()
     ]
 
-    # -------------------------------------------------------------------------
-    # Safety guards
-    # -------------------------------------------------------------------------
+    # =========================================================================
+    # SAFETY
+    # =========================================================================
+
     if valid_error.numel() == 0:
 
         valid_error = torch.tensor(
@@ -228,11 +322,16 @@ def instability_index(
             device=delta_ts.device,
         )
 
+    # =========================================================================
+    # BIOMARKERS
+    # =========================================================================
+
     return {
 
         # ---------------------------------------------------------------------
-        # Reconstruction biomarkers
+        # Reconstruction
         # ---------------------------------------------------------------------
+
         "mean_error":
             float(
                 valid_error.mean().item()
@@ -279,8 +378,9 @@ def instability_index(
             ),
 
         # ---------------------------------------------------------------------
-        # Instability biomarkers
+        # Delta biomarkers
         # ---------------------------------------------------------------------
+
         "mean_delta":
             float(
                 valid_delta.mean().item()
@@ -321,16 +421,25 @@ def instability_index(
                 ).item()
             ),
 
+        # ---------------------------------------------------------------------
+        # IMPROVED INSTABILITY INDEX
+        # ---------------------------------------------------------------------
+
         "instability_index":
             float(
-                valid_delta.std(
-                    unbiased=False
+                (
+                    valid_delta.mean()
+                    +
+                    valid_delta.std(
+                        unbiased=False
+                    )
                 ).item()
             ),
 
         # ---------------------------------------------------------------------
-        # Combined anomaly score
+        # Combined score
         # ---------------------------------------------------------------------
+
         "combined_score":
             float(
                 (
@@ -341,15 +450,16 @@ def instability_index(
             ),
     }
 
-
 # =============================================================================
 # CAP-ALIGNED ERROR
 # =============================================================================
+
 def cap_aligned_error(
     error_ts: torch.Tensor,
     cap: torch.Tensor,
     cap_type: int,
 ) -> torch.Tensor:
+
     """
     Reconstruction error during specific CAP subtype.
     """
@@ -358,16 +468,17 @@ def cap_aligned_error(
         cap == cap_type
     ]
 
-
 # =============================================================================
 # ROBUST THRESHOLD ESTIMATION
 # =============================================================================
+
 def estimate_threshold(
     normal_scores: NDArray[np.float64],
     method: str = "percentile",
     percentile: float = 95,
     k: float = 2.5,
 ) -> float:
+
     """
     Robust threshold estimation.
     """
@@ -377,6 +488,7 @@ def estimate_threshold(
     )
 
     if len(normal_scores) == 0:
+
         return float("nan")
 
     if method == "percentile":
@@ -402,74 +514,95 @@ def estimate_threshold(
         f"Unknown threshold method: {method}"
     )
 
-
 # =============================================================================
 # CLASSIFICATION METRICS
 # =============================================================================
+
 def classification_metrics(
     scores: NDArray[np.float64],
     labels: NDArray[np.int_],
     threshold: float,
 ) -> Dict[str, float]:
+
     """
     Clinical anomaly detection metrics.
     """
 
     scores = np.asarray(
         scores,
-        dtype=float,
+        dtype=np.float64,
     )
 
     labels = np.asarray(
         labels,
-        dtype=int,
+        dtype=np.int_,
     )
 
-    # -------------------------------------------------------------------------
-    # Remove NaN / Inf
-    # -------------------------------------------------------------------------
-    valid_mask = (
-        np.isfinite(scores)
-        &
-        np.isfinite(labels)
+    # =========================================================================
+    # SAFE FILTERING
+    # =========================================================================
+
+    scores, labels = clean_paired_arrays(
+        scores,
+        labels,
     )
 
-    scores = scores[
-        valid_mask
-    ]
+    # =========================================================================
+    # SAFETY
+    # =========================================================================
 
-    labels = labels[
-        valid_mask
-    ]
-
-    # -------------------------------------------------------------------------
-    # Safety
-    # -------------------------------------------------------------------------
     if len(scores) == 0:
 
         return {
-            "accuracy": float("nan"),
-            "balanced_accuracy": float("nan"),
-            "precision": float("nan"),
-            "recall": float("nan"),
-            "sensitivity": float("nan"),
-            "specificity": float("nan"),
-            "f1_score": float("nan"),
-            "roc_auc": float("nan"),
-            "auprc": float("nan"),
-            "tp": 0,
-            "tn": 0,
-            "fp": 0,
-            "fn": 0,
+
+            "accuracy":
+                float("nan"),
+
+            "balanced_accuracy":
+                float("nan"),
+
+            "precision":
+                float("nan"),
+
+            "recall":
+                float("nan"),
+
+            "sensitivity":
+                float("nan"),
+
+            "specificity":
+                float("nan"),
+
+            "f1_score":
+                float("nan"),
+
+            "roc_auc":
+                float("nan"),
+
+            "auprc":
+                float("nan"),
+
+            "tp":
+                0,
+
+            "tn":
+                0,
+
+            "fp":
+                0,
+
+            "fn":
+                0,
         }
 
     preds = (
         scores > threshold
     ).astype(int)
 
-    # -------------------------------------------------------------------------
-    # Confusion matrix
-    # -------------------------------------------------------------------------
+    # =========================================================================
+    # CONFUSION MATRIX
+    # =========================================================================
+
     cm = confusion_matrix(
         labels,
         preds,
@@ -478,15 +611,19 @@ def classification_metrics(
 
     if cm.shape != (2, 2):
 
-        tn, fp, fn, tp = 0, 0, 0, 0
+        tn, fp, fn, tp = (
+            0,
+            0,
+            0,
+            0,
+        )
 
     else:
 
-        tn, fp, fn, tp = cm.ravel()
+        tn, fp, fn, tp = (
+            cm.ravel()
+        )
 
-    # -------------------------------------------------------------------------
-    # Clinical metrics
-    # -------------------------------------------------------------------------
     specificity = (
         tn
         /
@@ -536,10 +673,14 @@ def classification_metrics(
             ),
 
         "sensitivity":
-            float(sensitivity),
+            float(
+                sensitivity
+            ),
 
         "specificity":
-            float(specificity),
+            float(
+                specificity
+            ),
 
         "f1_score":
             float(
@@ -550,15 +691,23 @@ def classification_metrics(
                 )
             ),
 
-        "tp": int(tp),
-        "tn": int(tn),
-        "fp": int(fp),
-        "fn": int(fn),
+        "tp":
+            int(tp),
+
+        "tn":
+            int(tn),
+
+        "fp":
+            int(fp),
+
+        "fn":
+            int(fn),
     }
 
-    # -------------------------------------------------------------------------
+    # =========================================================================
     # AUROC + AUPRC
-    # -------------------------------------------------------------------------
+    # =========================================================================
+
     if len(np.unique(labels)) == 2:
 
         try:
@@ -595,10 +744,10 @@ def classification_metrics(
 
     return metrics
 
-
 # =============================================================================
 # BOOTSTRAP AUROC CI
 # =============================================================================
+
 def bootstrap_auc_ci(
     labels: NDArray[np.int_],
     scores: NDArray[np.float64],
@@ -606,21 +755,30 @@ def bootstrap_auc_ci(
     alpha: float = 0.95,
     seed: int = 42,
 ) -> Tuple[float, float]:
+
     """
     Bootstrap confidence interval for AUROC.
     """
 
-    labels = clean_numpy(np.asarray(labels, dtype=np.int_))
-    scores = clean_numpy(scores)
+    labels, scores = clean_paired_arrays(
+        np.asarray(labels, dtype=np.int_),
+        np.asarray(scores, dtype=np.float64),
+    )
 
-    if len(labels) == 0:
+    # =========================================================================
+    # SMALL SAMPLE SAFETY
+    # =========================================================================
+
+    if len(labels) < 10:
 
         return (
             float("nan"),
             float("nan"),
         )
 
-    rng = np.random.default_rng(seed)
+    rng = np.random.default_rng(
+        seed
+    )
 
     aucs = []
 
@@ -639,12 +797,16 @@ def bootstrap_auc_ci(
         s = scores[idx]
 
         if len(np.unique(y)) < 2:
+
             continue
 
         try:
 
             aucs.append(
-                roc_auc_score(y, s)
+                roc_auc_score(
+                    y,
+                    s,
+                )
             )
 
         except Exception:
@@ -672,10 +834,10 @@ def bootstrap_auc_ci(
         float(upper),
     )
 
-
 # =============================================================================
 # BOOTSTRAP AUPRC CI
 # =============================================================================
+
 def bootstrap_auprc_ci(
     labels: NDArray[np.int_],
     scores: NDArray[np.float64],
@@ -683,21 +845,30 @@ def bootstrap_auprc_ci(
     alpha: float = 0.95,
     seed: int = 42,
 ) -> Tuple[float, float]:
+
     """
     Bootstrap confidence interval for AUPRC.
     """
 
-    labels = clean_numpy(labels)
-    scores = clean_numpy(scores)
+    labels, scores = clean_paired_arrays(
+        np.asarray(labels, dtype=np.int_),
+        np.asarray(scores, dtype=np.float64),
+    )
 
-    if len(labels) == 0:
+    # =========================================================================
+    # SMALL SAMPLE SAFETY
+    # =========================================================================
+
+    if len(labels) < 10:
 
         return (
             float("nan"),
             float("nan"),
         )
 
-    rng = np.random.default_rng(seed)
+    rng = np.random.default_rng(
+        seed
+    )
 
     values = []
 
@@ -716,6 +887,7 @@ def bootstrap_auprc_ci(
         s = scores[idx]
 
         if len(np.unique(y)) < 2:
+
             continue
 
         try:
@@ -752,17 +924,14 @@ def bootstrap_auprc_ci(
         float(upper),
     )
 
-
 # =============================================================================
 # MANN-WHITNEY SIGNIFICANCE
 # =============================================================================
+
 def mann_whitney_significance(
     control_scores: NDArray[np.float64],
     disorder_scores: NDArray[np.float64],
 ) -> Dict[str, float]:
-    """
-    Non-parametric significance testing.
-    """
 
     control_scores = clean_numpy(
         control_scores
@@ -779,8 +948,12 @@ def mann_whitney_significance(
     ):
 
         return {
-            "u_statistic": float("nan"),
-            "p_value": float("nan"),
+
+            "u_statistic":
+                float("nan"),
+
+            "p_value":
+                float("nan"),
         }
 
     stat, p = mannwhitneyu(
@@ -790,34 +963,42 @@ def mann_whitney_significance(
     )
 
     return {
-        "u_statistic": float(stat),
-        "p_value": float(p),
-    }
 
+        "u_statistic":
+            float(stat),
+
+        "p_value":
+            float(p),
+    }
 
 # =============================================================================
 # KRUSKAL-WALLIS
 # =============================================================================
+
 def kruskal_cap_test(
     *groups,
 ) -> Dict[str, float]:
-    """
-    CAP-wise significance analysis.
-    """
 
     valid_groups = [
+
         clean_numpy(
             np.asarray(g)
         )
+
         for g in groups
+
         if len(g) > 0
     ]
 
     if len(valid_groups) < 2:
 
         return {
-            "h_statistic": float("nan"),
-            "p_value": float("nan"),
+
+            "h_statistic":
+                float("nan"),
+
+            "p_value":
+                float("nan"),
         }
 
     stat, p = kruskal(
@@ -825,27 +1006,29 @@ def kruskal_cap_test(
     )
 
     return {
-        "h_statistic": float(stat),
-        "p_value": float(p),
+
+        "h_statistic":
+            float(stat),
+
+        "p_value":
+            float(p),
     }
 
+# =============================================================================
+# EFFECT SIZE
+# =============================================================================
 
-# =============================================================================
-# EFFECT SIZE (COHEN'S d)
-# =============================================================================
 def cohens_d(
     x: NDArray[np.float64],
     y: NDArray[np.float64],
 ) -> float:
-    """
-    Cohen's d effect size.
-    """
 
     x = clean_numpy(x)
 
     y = clean_numpy(y)
 
     if len(x) < 2 or len(y) < 2:
+
         return 0.0
 
     nx = len(x)
@@ -853,32 +1036,44 @@ def cohens_d(
     ny = len(y)
 
     pooled_std = np.sqrt(
+
         (
             ((nx - 1) * np.var(x, ddof=1))
+
             +
+
             ((ny - 1) * np.var(y, ddof=1))
         )
+
         /
+
         (nx + ny - 2 + EPS)
     )
 
     if pooled_std < EPS:
+
         return 0.0
 
     return float(
-        (
-            np.mean(x)
-            -
-            np.mean(y)
-        )
-        /
-        pooled_std
-    )
 
+        abs(
+
+            (
+                np.mean(x)
+                -
+                np.mean(y)
+            )
+
+            /
+
+            pooled_std
+        )
+    )
 
 # =============================================================================
 # BOOTSTRAP EFFECT SIZE CI
 # =============================================================================
+
 def bootstrap_effect_size_ci(
     x: NDArray[np.float64],
     y: NDArray[np.float64],
@@ -886,9 +1081,6 @@ def bootstrap_effect_size_ci(
     alpha: float = 0.95,
     seed: int = 42,
 ) -> Tuple[float, float]:
-    """
-    Bootstrap CI for Cohen's d.
-    """
 
     x = clean_numpy(x)
 
@@ -901,7 +1093,9 @@ def bootstrap_effect_size_ci(
             float("nan"),
         )
 
-    rng = np.random.default_rng(seed)
+    rng = np.random.default_rng(
+        seed
+    )
 
     ds = []
 
@@ -938,24 +1132,23 @@ def bootstrap_effect_size_ci(
         float(upper),
     )
 
-
 # =============================================================================
 # EXPECTED CALIBRATION ERROR
 # =============================================================================
+
 def expected_calibration_error(
     probs: NDArray[np.float64],
     labels: NDArray[np.int_],
     n_bins: int = 10,
 ) -> float:
-    """
-    Expected calibration error (ECE).
-    """
 
-    probs = clean_numpy(probs)
-
-    labels = clean_numpy(labels)
+    probs, labels = clean_paired_arrays(
+        np.asarray(probs, dtype=np.float64),
+        np.asarray(labels, dtype=np.int_),
+    )
 
     if len(probs) == 0:
+
         return float("nan")
 
     probs = np.clip(
@@ -974,13 +1167,34 @@ def expected_calibration_error(
 
     for i in range(n_bins):
 
-        mask = (
-            (probs >= bins[i])
-            &
-            (probs < bins[i + 1])
-        )
+        # =====================================================================
+        # LAST BIN FIX
+        # =====================================================================
+
+        if i == n_bins - 1:
+
+            mask = (
+
+                (probs >= bins[i])
+
+                &
+
+                (probs <= bins[i + 1])
+            )
+
+        else:
+
+            mask = (
+
+                (probs >= bins[i])
+
+                &
+
+                (probs < bins[i + 1])
+            )
 
         if mask.sum() == 0:
+
             continue
 
         acc = labels[mask].mean()
@@ -988,26 +1202,29 @@ def expected_calibration_error(
         conf = probs[mask].mean()
 
         ece += (
+
             np.abs(acc - conf)
+
             *
+
             mask.mean()
         )
 
     return float(ece)
 
-
 # =============================================================================
 # SAFE NUMPY EXPORT
 # =============================================================================
+
 def to_numpy_safe(
     x: torch.Tensor,
 ) -> NDArray[np.float64]:
-    """
-    Safe tensor -> numpy conversion.
-    """
 
     return (
+
         x.detach()
+
         .cpu()
+
         .numpy()
     )

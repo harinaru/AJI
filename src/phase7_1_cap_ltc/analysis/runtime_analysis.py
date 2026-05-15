@@ -548,7 +548,7 @@ def run_runtime_analysis():
     generate_runtime_report(df)
 
     logging.info(
-        "✅ Runtime analysis complete"
+        "Runtime analysis complete"
     )
 
 

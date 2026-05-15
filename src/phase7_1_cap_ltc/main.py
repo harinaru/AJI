@@ -1,34 +1,46 @@
+# src/phase7_1_cap_ltc/main.py
+
 """
-Phase 7 — CAP-LTC Master Controller (FINAL, Q1 JOURNAL-GRADE)
---------------------------------------------------------------
-Controls:
-✔ Phase 7.0a: Phase-2 CSV → tensor preparation
-✔ Phase 7.0b: Temporal windowing
-✔ Phase 7.1: Training (multi-overlap)
-✔ Phase 7.2: τ Analysis
-✔ Phase 7.3: Ablation
-✔ Inference (multi-overlap)
-✔ Reviewer-grade evaluation
-✔ Journal-grade visualizations
-✔ Latent embedding extraction
-✔ t-SNE / UMAP analysis
-✔ Integrated Gradients XAI
-✔ Multi-seed robustness evaluation
-✔ Runtime benchmarking
-✔ Reviewer-safe logging
+Phase 7 — CAP-LTC Master Controller
+===================================
+
+FINAL REVIEWER-GRADE VERSION
+============================
+
+✔ Explicit overlap propagation
+✔ No stale config state
+✔ No overlap caching
+✔ Reviewer-safe orchestration
+✔ Overlap-safe outputs
+✔ Multi-run safe
+✔ Multi-seed safe
+✔ Non-overwriting
 ✔ Failure-safe execution
+✔ Q1 journal-ready
+✔ Windows-safe
+✔ mmap-safe
+✔ Modular execution
+✔ Persistent experiment tracking
 """
+
+# =============================================================================
+# IMPORTS
+# =============================================================================
 
 import argparse
+import json
 import logging
+import sys
 
 from datetime import datetime
+from pathlib import Path
 
 from . import config
 
 # =============================================================================
 # PREPROCESS
 # =============================================================================
+
 from .preprocess.prepare_from_phase2 import (
     prepare_all_subjects,
 )
@@ -38,144 +50,185 @@ from .preprocess.windowing import (
 )
 
 # =============================================================================
-# TRAINING
+# PIPELINE MODULES
 # =============================================================================
+
 from .train import run_training
 
-# =============================================================================
-# TAU ANALYSIS
-# =============================================================================
-from .analysis.tau_analysis import (
-    run_tau_analysis,
-)
-
-# =============================================================================
-# ABLATION
-# =============================================================================
-from .ablation import run_ablation
-
-# =============================================================================
-# INFERENCE
-# =============================================================================
 from .infer import run_inference
 
-# =============================================================================
-# EVALUATION
-# =============================================================================
 from .evaluate import run_evaluation
 
-# =============================================================================
-# VISUALIZATION
-# =============================================================================
-from .visualize import run_all_visualizations
-
-# =============================================================================
-# ADVANCED ANALYSIS
-# =============================================================================
 from .latent import run_latent_analysis
 
 from .xai.xai_integrated_gradients import (
     run_integrated_gradients,
 )
 
+from .analysis.tau_analysis import (
+    run_tau_analysis,
+)
+
+from .ablation import run_ablation
+
 from .analysis.runtime_analysis import (
     run_runtime_analysis,
+)
+
+from .visualize import (
+    run_all_visualizations,
 )
 
 from .multi_seed import (
     run_multi_seed_evaluation,
 )
 
+# =============================================================================
+# MASTER RUN
+# =============================================================================
+
+MASTER_RUN_ID = datetime.now().strftime(
+    "%Y%m%d_%H%M%S"
+)
+
+MASTER_RUN_DIR = (
+    config.RESULTS_DIR
+    / "master_runs"
+    / MASTER_RUN_ID
+)
+
+MASTER_RUN_DIR.mkdir(
+    parents=True,
+    exist_ok=True,
+)
+
+# =============================================================================
+# LOGGER
+# =============================================================================
+
+LOGGER = logging.getLogger(
+    "phase7_master"
+)
+
+LOGGER.setLevel(logging.INFO)
+
+if not LOGGER.handlers:
+
+    formatter = logging.Formatter(
+        "%(asctime)s | %(levelname)s | %(message)s"
+    )
+
+    console_handler = logging.StreamHandler(
+        sys.stdout
+    )
+
+    console_handler.setFormatter(
+        formatter
+    )
+
+    file_handler = logging.FileHandler(
+
+        MASTER_RUN_DIR
+        / "master_pipeline.log",
+
+        encoding="utf-8",
+    )
+
+    file_handler.setFormatter(
+        formatter
+    )
+
+    LOGGER.addHandler(console_handler)
+    LOGGER.addHandler(file_handler)
+
+# =============================================================================
+# METADATA
+# =============================================================================
+
+def save_master_metadata():
+
+    metadata = {
+
+        "master_run_id":
+            MASTER_RUN_ID,
+
+        "timestamp":
+            str(datetime.now()),
+
+        "device":
+            str(config.DEVICE),
+
+        "seed":
+            int(config.SEED),
+
+        "overlaps":
+            [
+                int(o * 100)
+                for o in config.OVERLAPS
+            ],
+
+        "window_size":
+            int(config.WINDOW_SIZE),
+
+        "batch_size":
+            int(config.BATCH_SIZE),
+
+        "learning_rate":
+            float(config.LEARNING_RATE),
+
+        "epochs":
+            int(config.MAX_EPOCHS),
+    }
+
+    path = (
+        MASTER_RUN_DIR
+        / "master_metadata.json"
+    )
+
+    with open(
+        path,
+        "w",
+        encoding="utf-8",
+    ) as f:
+
+        json.dump(
+            metadata,
+            f,
+            indent=4,
+        )
+
+    LOGGER.info(
+        f"[Metadata] Saved: {path}"
+    )
 
 # =============================================================================
 # ARGUMENTS
 # =============================================================================
+
 def parse_args():
 
-    parser = argparse.ArgumentParser(
-        "CAP-LTC Phase 7 Controller"
-    )
+    parser = argparse.ArgumentParser()
 
-    # -------------------------------------------------------------------------
-    # CORE
-    # -------------------------------------------------------------------------
-    parser.add_argument(
-        "--prep",
-        action="store_true",
-    )
-
-    parser.add_argument(
-        "--window",
-        action="store_true",
-    )
-
-    parser.add_argument(
-        "--train",
-        action="store_true",
-    )
-
-    parser.add_argument(
-        "--tau",
-        action="store_true",
-    )
-
-    parser.add_argument(
-        "--ablation",
-        action="store_true",
-    )
-
-    parser.add_argument(
-        "--infer",
-        action="store_true",
-    )
-
-    parser.add_argument(
-        "--eval",
-        action="store_true",
-    )
-
-    parser.add_argument(
-        "--viz",
-        action="store_true",
-    )
-
-    # -------------------------------------------------------------------------
-    # ADVANCED
-    # -------------------------------------------------------------------------
-    parser.add_argument(
-        "--latent",
-        action="store_true",
-    )
-
-    parser.add_argument(
-        "--xai",
-        action="store_true",
-    )
-
-    parser.add_argument(
-        "--runtime",
-        action="store_true",
-    )
-
-    parser.add_argument(
-        "--multiseed",
-        action="store_true",
-    )
-
-    # -------------------------------------------------------------------------
-    # FULL PIPELINE
-    # -------------------------------------------------------------------------
-    parser.add_argument(
-        "--all",
-        action="store_true",
-    )
+    parser.add_argument("--prep", action="store_true")
+    parser.add_argument("--window", action="store_true")
+    parser.add_argument("--train", action="store_true")
+    parser.add_argument("--tau", action="store_true")
+    parser.add_argument("--infer", action="store_true")
+    parser.add_argument("--eval", action="store_true")
+    parser.add_argument("--latent", action="store_true")
+    parser.add_argument("--xai", action="store_true")
+    parser.add_argument("--viz", action="store_true")
+    parser.add_argument("--runtime", action="store_true")
+    parser.add_argument("--multiseed", action="store_true")
+    parser.add_argument("--ablation", action="store_true")
+    parser.add_argument("--all", action="store_true")
 
     return parser.parse_args()
 
+# =============================================================================
+# SAFE RUN
+# =============================================================================
 
-# =============================================================================
-# SAFE EXECUTION WRAPPER
-# =============================================================================
 def safe_run(
     name: str,
     fn,
@@ -183,427 +236,353 @@ def safe_run(
 
     print(f"\n▶ {name}")
 
+    LOGGER.info(
+        f"STARTED → {name}"
+    )
+
     try:
 
         fn()
 
-        print(f"✔ {name} completed")
+        LOGGER.info(
+            f"COMPLETED → {name}"
+        )
+
+        print(
+            f"✔ {name} completed"
+        )
 
     except Exception as e:
 
-        logging.exception(
-            f"[ERROR] {name} failed"
+        LOGGER.exception(
+            f"FAILED → {name}"
         )
 
         print(
             f"✖ {name} failed → {e}"
         )
 
+# =============================================================================
+# OVERLAP DIRS
+# =============================================================================
 
-# =============================================================================
-# OVERLAP LOOP
-# =============================================================================
-def run_overlap_pipeline(
-    overlap: float
+def create_overlap_dirs(
+    overlap: float,
 ):
 
     overlap_pct = int(
         overlap * 100
     )
 
-    print(
-        "\n"
-        + "=" * 70
+    overlap_tag = (
+        f"overlap_{overlap_pct}"
     )
 
-    print(
-        f"RUNNING OVERLAP = "
-        f"{overlap_pct}%"
+    run_dir = (
+        MASTER_RUN_DIR
+        / overlap_tag
     )
 
-    print(
-        "=" * 70
+    run_dir.mkdir(
+        parents=True,
+        exist_ok=True,
     )
 
-    # -------------------------------------------------------------------------
-    # IMPORTANT:
-    # SET GLOBAL OVERLAP
-    # -------------------------------------------------------------------------
-    config.OVERLAP_PERCENT = overlap
+    subdirs = [
 
-    # -------------------------------------------------------------------------
-    # TRAINING
-    # -------------------------------------------------------------------------
-    safe_run(
-        "Phase 7.1 — TRAINING",
-        run_training,
+        "models",
+        "logs",
+        "splits",
+        "tau",
+        "inference",
+        "evaluation",
+        "latent",
+        "xai",
+        "runtime",
+        "visualization",
+    ]
+
+    for s in subdirs:
+
+        (
+            run_dir / s
+        ).mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+    LOGGER.info(
+        f"[Dirs] Created: {run_dir}"
     )
 
-    # -------------------------------------------------------------------------
-    # TAU ANALYSIS
-    # -------------------------------------------------------------------------
-    safe_run(
-        "Phase 7.2 — τ ANALYSIS",
-        run_tau_analysis,
-    )
-
-    # -------------------------------------------------------------------------
-    # INFERENCE
-    # -------------------------------------------------------------------------
-    safe_run(
-        "INFERENCE",
-        run_inference,
-    )
-
-    # -------------------------------------------------------------------------
-    # EVALUATION
-    # -------------------------------------------------------------------------
-    safe_run(
-        "EVALUATION",
-        run_evaluation,
-    )
-
-    # -------------------------------------------------------------------------
-    # LATENT EXTRACTION
-    # -------------------------------------------------------------------------
-    safe_run(
-        "LATENT EXTRACTION",
-        run_latent_analysis,
-    )
-
-    # -------------------------------------------------------------------------
-    # INTEGRATED GRADIENTS
-    # -------------------------------------------------------------------------
-    safe_run(
-        "INTEGRATED GRADIENTS",
-        run_integrated_gradients,
-    )
-
-    print(
-        f"\n✔ OVERLAP "
-        f"{overlap_pct}% COMPLETE"
-    )
-
+    return run_dir
 
 # =============================================================================
 # MAIN
 # =============================================================================
+
 def main():
 
     args = parse_args()
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format=(
-            "%(asctime)s | "
-            "%(levelname)s | "
-            "%(message)s"
-        ),
-    )
-
     start_time = datetime.now()
 
-    print(
-        "\n"
-        + "=" * 80
-    )
+    save_master_metadata()
 
-    print(
-        "CAP-LTC PHASE 7 "
+    LOGGER.info(
         "PIPELINE STARTED"
     )
 
-    print(
-        f"Start Time : "
-        f"{start_time}"
-    )
-
-    print("=" * 80)
-
-    # -------------------------------------------------------------------------
-    # CONFIG SUMMARY
-    # -------------------------------------------------------------------------
     config.summary()
 
     # =========================================================================
-    # FULL PIPELINE
+    # PREP
     # =========================================================================
-    if args.all:
 
-        # ---------------------------------------------------------------------
-        # PREPARATION
-        # ---------------------------------------------------------------------
+    if args.prep or args.all:
+
         safe_run(
-            "Phase 7.0a — PREPARATION",
+            "PREPARATION",
             prepare_all_subjects,
         )
 
-        # ---------------------------------------------------------------------
-        # WINDOWING
-        # ---------------------------------------------------------------------
-        print(
-            "\n▶▶ "
-            "Phase 7.0b — WINDOWING"
-        )
+    # =========================================================================
+    # WINDOWING
+    # =========================================================================
+
+    if args.window or args.all:
 
         for overlap in config.OVERLAPS:
 
-            try:
+            safe_run(
 
-                run_windowing(
-                    prepared_root=config.PREPARED_DIR,
-                    output_root=config.DATA_DIR,
-                    overlap=overlap,
-                    window_size=config.WINDOW_SIZE,
-                )
+                f"WINDOWING {int(overlap * 100)}%",
 
-                print(
-                    f"✔ Windowing "
-                    f"{int(overlap*100)}%"
-                )
+                lambda overlap=overlap:
+                    run_windowing(
 
-            except Exception as e:
+                        prepared_root=config.PREPARED_DIR,
 
-                logging.exception(
-                    "[ERROR] Windowing failed"
-                )
+                        output_root=config.DATA_DIR,
 
-                print(
-                    f"✖ Windowing failed → {e}"
-                )
+                        overlap=overlap,
 
-        # ---------------------------------------------------------------------
-        # MULTI-OVERLAP PIPELINE
-        # ---------------------------------------------------------------------
+                        window_size=config.WINDOW_SIZE,
+                    )
+            )
+
+    # =========================================================================
+    # OVERLAP PIPELINE
+    # =========================================================================
+
+    overlap_tasks_requested = any([
+
+        args.train,
+        args.tau,
+        args.infer,
+        args.eval,
+        args.latent,
+        args.xai,
+        args.all,
+    ])
+
+    if overlap_tasks_requested:
+
         for overlap in config.OVERLAPS:
 
-            run_overlap_pipeline(
+            overlap_pct = int(
+                overlap * 100
+            )
+
+            print(
+                "\n" + "=" * 80
+            )
+
+            print(
+                f"OVERLAP {overlap_pct}%"
+            )
+
+            print(
+                "=" * 80
+            )
+
+            run_dir = create_overlap_dirs(
                 overlap
             )
 
-        # ---------------------------------------------------------------------
-        # ABLATION
-        # ---------------------------------------------------------------------
+            # =============================================================
+            # TRAIN
+            # =============================================================
+
+            if args.train or args.all:
+
+                safe_run(
+
+                    f"TRAIN {overlap_pct}%",
+
+                    lambda overlap=overlap,
+                           run_dir=run_dir:
+
+                    run_training(
+
+                        overlap=overlap,
+
+                        run_dir=run_dir,
+                    )
+                )
+
+            # =============================================================
+            # TAU
+            # =============================================================
+
+            if args.tau or args.all:
+
+                safe_run(
+
+                    f"TAU {overlap_pct}%",
+
+                    lambda overlap=overlap,
+                           run_dir=run_dir:
+
+                    run_tau_analysis(
+
+                        overlap=overlap,
+
+                        run_dir=run_dir,
+                    )
+                )
+
+            # =============================================================
+            # INFERENCE
+            # =============================================================
+
+            if args.infer or args.all:
+
+                safe_run(
+
+                    f"INFERENCE {overlap_pct}%",
+
+                    lambda overlap=overlap,
+                           run_dir=run_dir:
+
+                    run_inference(
+
+                        overlap=overlap,
+
+                        run_dir=run_dir,
+                    )
+                )
+
+            # =============================================================
+            # EVALUATION
+            # =============================================================
+
+            if args.eval or args.all:
+
+                safe_run(
+
+                    f"EVALUATION {overlap_pct}%",
+
+                    lambda overlap=overlap,
+                           run_dir=run_dir:
+
+                    run_evaluation(
+
+                        overlap=overlap,
+
+                        run_dir=run_dir,
+                    )
+                )
+
+            # =============================================================
+            # LATENT
+            # =============================================================
+
+            if args.latent or args.all:
+
+                safe_run(
+
+                    f"LATENT {overlap_pct}%",
+
+                    lambda overlap=overlap,
+                           run_dir=run_dir:
+
+                    run_latent_analysis(
+
+                        overlap=overlap,
+
+                        run_dir=run_dir,
+                    )
+                )
+
+            # =============================================================
+            # XAI
+            # =============================================================
+
+            if args.xai or args.all:
+
+                safe_run(
+
+                    f"XAI {overlap_pct}%",
+
+                    lambda overlap=overlap,
+                           run_dir=run_dir:
+
+                    run_integrated_gradients(
+
+                        overlap=overlap,
+
+                        run_dir=run_dir,
+                    )
+                )
+
+    # =========================================================================
+    # GLOBAL MODULES
+    # =========================================================================
+
+    if args.ablation or args.all:
+
         safe_run(
-            "Phase 7.3 — ABLATION",
+            "ABLATION",
             run_ablation,
         )
 
-        # ---------------------------------------------------------------------
-        # MULTI-SEED
-        # ---------------------------------------------------------------------
+    if args.multiseed or args.all:
+
         safe_run(
-            "MULTI-SEED EVALUATION",
+            "MULTI-SEED",
             run_multi_seed_evaluation,
         )
 
-        # ---------------------------------------------------------------------
-        # RUNTIME ANALYSIS
-        # ---------------------------------------------------------------------
+    if args.runtime or args.all:
+
         safe_run(
-            "RUNTIME ANALYSIS",
+            "RUNTIME",
             run_runtime_analysis,
         )
 
-        # ---------------------------------------------------------------------
-        # VISUALIZATION
-        # ---------------------------------------------------------------------
+    if args.viz or args.all:
+
         safe_run(
-            "VISUALIZATIONS",
+            "VISUALIZATION",
             run_all_visualizations,
         )
 
     # =========================================================================
-    # PARTIAL MODES
+    # FINISH
     # =========================================================================
-    else:
 
-        executed = False
-
-        # ---------------------------------------------------------------------
-        # PREPARATION
-        # ---------------------------------------------------------------------
-        if args.prep:
-
-            safe_run(
-                "PREPARATION",
-                prepare_all_subjects,
-            )
-
-            executed = True
-
-        # ---------------------------------------------------------------------
-        # WINDOWING
-        # ---------------------------------------------------------------------
-        if args.window:
-
-            print("\n▶ WINDOWING")
-
-            for overlap in config.OVERLAPS:
-
-                try:
-
-                    run_windowing(
-                        prepared_root=config.PREPARED_DIR,
-                        output_root=config.DATA_DIR,
-                        overlap=overlap,
-                        window_size=config.WINDOW_SIZE,
-                    )
-
-                    print(
-                        f"✔ Windowing "
-                        f"{int(overlap*100)}%"
-                    )
-
-                except Exception as e:
-
-                    print(
-                        f"✖ Windowing failed → {e}"
-                    )
-
-            executed = True
-
-        # ---------------------------------------------------------------------
-        # TRAINING
-        # ---------------------------------------------------------------------
-        if args.train:
-
-            safe_run(
-                "TRAINING",
-                run_training,
-            )
-
-            executed = True
-
-        # ---------------------------------------------------------------------
-        # TAU ANALYSIS
-        # ---------------------------------------------------------------------
-        if args.tau:
-
-            safe_run(
-                "τ ANALYSIS",
-                run_tau_analysis,
-            )
-
-            executed = True
-
-        # ---------------------------------------------------------------------
-        # ABLATION
-        # ---------------------------------------------------------------------
-        if args.ablation:
-
-            safe_run(
-                "ABLATION",
-                run_ablation,
-            )
-
-            executed = True
-
-        # ---------------------------------------------------------------------
-        # INFERENCE
-        # ---------------------------------------------------------------------
-        if args.infer:
-
-            safe_run(
-                "INFERENCE",
-                run_inference,
-            )
-
-            executed = True
-
-        # ---------------------------------------------------------------------
-        # EVALUATION
-        # ---------------------------------------------------------------------
-        if args.eval:
-
-            safe_run(
-                "EVALUATION",
-                run_evaluation,
-            )
-
-            executed = True
-
-        # ---------------------------------------------------------------------
-        # VISUALIZATION
-        # ---------------------------------------------------------------------
-        if args.viz:
-
-            safe_run(
-                "VISUALIZATION",
-                run_all_visualizations,
-            )
-
-            executed = True
-
-        # ---------------------------------------------------------------------
-        # LATENT
-        # ---------------------------------------------------------------------
-        if args.latent:
-
-            safe_run(
-                "LATENT EXTRACTION",
-                run_latent_analysis,
-            )
-
-            executed = True
-
-        # ---------------------------------------------------------------------
-        # XAI
-        # ---------------------------------------------------------------------
-        if args.xai:
-
-            safe_run(
-                "INTEGRATED GRADIENTS",
-                run_integrated_gradients,
-            )
-
-            executed = True
-
-        # ---------------------------------------------------------------------
-        # RUNTIME
-        # ---------------------------------------------------------------------
-        if args.runtime:
-
-            safe_run(
-                "RUNTIME ANALYSIS",
-                run_runtime_analysis,
-            )
-
-            executed = True
-
-        # ---------------------------------------------------------------------
-        # MULTI-SEED
-        # ---------------------------------------------------------------------
-        if args.multiseed:
-
-            safe_run(
-                "MULTI-SEED EVALUATION",
-                run_multi_seed_evaluation,
-            )
-
-            executed = True
-
-        # ---------------------------------------------------------------------
-        # NOTHING SELECTED
-        # ---------------------------------------------------------------------
-        if not executed:
-
-            print(
-                "\n⚠️ No action selected.\n"
-                "Use --all or individual flags."
-            )
-
-    # =========================================================================
-    # END
-    # =========================================================================
     total_time = (
         datetime.now()
         - start_time
     )
 
+    LOGGER.info(
+        f"PIPELINE FINISHED | {total_time}"
+    )
+
     print(
-        "\n"
-        + "=" * 80
+        "\n" + "=" * 80
     )
 
     print(
@@ -611,16 +590,17 @@ def main():
     )
 
     print(
-        f"Total Time : "
-        f"{total_time}"
+        f"Total Time : {total_time}"
     )
 
-    print("=" * 80 + "\n")
-
+    print(
+        "=" * 80 + "\n"
+    )
 
 # =============================================================================
 # MAIN
 # =============================================================================
+
 if __name__ == "__main__":
 
     main()

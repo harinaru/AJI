@@ -5,33 +5,32 @@ CAP-LTC Cell
 ------------
 CAP-modulated continuous-time recurrent dynamics.
 
-FINAL REVIEWER-GRADE VERSION
-============================
+FIXED VERSION — AUROC IMPROVEMENT
+==================================
 
-✔ CAP-conditioned temporal adaptation
-✔ Continuous-time neural dynamics
-✔ Stable positive τ via softplus
-✔ Numerical stability constraints
-✔ Hidden-state stabilization
-✔ Reviewer-grade explainability support
-✔ τ trajectory extraction
-✔ XAI-ready implementation
-✔ Stable leaky integration
-✔ Continuous-time residual dynamics
-✔ Smooth bounded hidden states
-✔ NaN-safe dynamics
-✔ Stable Euler-inspired integration
-✔ Physiologically constrained τ
-✔ Reviewer-safe ODE formulation
+CHANGES FROM PREVIOUS VERSION
+------------------------------
+1. Removed double tanh saturation.
+   The old code applied tanh to dh AND then tanh(h_new)*5 immediately after.
+   This killed gradients and made all hidden states near-constant regardless
+   of CAP state. Now only ONE activation is applied to dh. h_new is stabilized
+   with a simple clamp, preserving gradient flow.
+
+2. Removed broken h_new = tanh(h_new)*5.0 block.
+   That line destroyed the continuous-time ODE semantics entirely. The leaky
+   integration formula (1-γ)*h_prev + γ*dh now works as intended.
+
+3. τ initialization moved to config.py (TAU_BASE_INIT=3.0).
+   With the old init (0.5), softplus(0.5)≈0.97, DT/τ≈1.0 — meaning γ≈1,
+   h_prev was forgotten every step. Now τ≈3.1, γ≈0.32, the cell integrates
+   ~3 timesteps of context per step.
 
 Mathematical Formulation
 ------------------------
 
 CAP-conditioned time constants:
 
-    τ(t) = τ_min + softplus(
-                τ_base + τ_cap[s_t]
-           )
+    τ(t) = τ_min + softplus(τ_base + τ_cap[s_t])
 
 Stable continuous-time integration:
 
@@ -39,22 +38,18 @@ Stable continuous-time integration:
 
 Hidden-state update:
 
-    h_t =
-        (1 - γ_t) * h_(t-1)
-        +
-        γ_t * φ(
-            α(Wx + Uh)
-        )
+    h_t = (1 - γ_t) * h_(t-1)  +  γ_t * tanh(α(Wx + Uh))
 
-where:
-    s_t = CAP state
+Stabilization (no saturation):
 
-This formulation provides:
+    h_t = clamp(h_t, -5, 5)     ← simple clamp, no tanh, no gradient kill
 
 ✔ Stable bounded dynamics
 ✔ Continuous-time temporal adaptation
 ✔ Physiologically interpretable τ modulation
-✔ Reviewer-grade numerical stability
+✔ Gradient-friendly — no double tanh
+✔ NaN-safe dynamics
+✔ XAI-ready τ extraction
 """
 
 # =============================================================================
@@ -98,6 +93,9 @@ class CAPLTCCell(nn.Module):
 
         # ---------------------------------------------------------------------
         # Learnable base τ
+        # NOTE: initialized from config.TAU_BASE_INIT
+        # Old value 0.5 gave γ≈1 (no memory). New value 3.0 gives γ≈0.32
+        # (integrates ~3 timesteps). This is the key fix for temporal learning.
         # ---------------------------------------------------------------------
 
         self.tau_base = nn.Parameter(
@@ -112,6 +110,8 @@ class CAPLTCCell(nn.Module):
 
         # ---------------------------------------------------------------------
         # CAP-specific τ modulation
+        # Larger offsets let A1/A2/A3 produce genuinely different τ values,
+        # giving the cell distinct temporal dynamics per CAP state.
         # ---------------------------------------------------------------------
 
         self.tau_cap = nn.Parameter(
@@ -191,13 +191,12 @@ class CAPLTCCell(nn.Module):
             CAP state index
 
         return_tau:
-            If True:
-                returns (h_new, tau)
+            If True: returns (h_new, tau)
 
         Returns
         -------
         h_new:
-            Updated hidden state
+            Updated hidden state (clamped, no double-tanh)
 
         Optional:
             tau
@@ -231,7 +230,9 @@ class CAPLTCCell(nn.Module):
         )
 
         # ---------------------------------------------------------------------
-        # Stable positive τ
+        # Stable positive τ via softplus
+        # softplus(3.0) ≈ 3.05, so τ ≈ TAU_MIN + 3.05 ≈ 3.1
+        # γ = DT/τ ≈ 1/3.1 ≈ 0.32  →  cell integrates ~3 timesteps
         # ---------------------------------------------------------------------
 
         tau = (
@@ -246,7 +247,7 @@ class CAPLTCCell(nn.Module):
         ).unsqueeze(-1)
 
         # ---------------------------------------------------------------------
-        # Numerical stability
+        # Numerical stability bounds
         # ---------------------------------------------------------------------
 
         tau = torch.clamp(
@@ -259,7 +260,8 @@ class CAPLTCCell(nn.Module):
         )
 
         # =====================================================================
-        # STABLE LEAK COEFFICIENT
+        # LEAK COEFFICIENT  γ = Δt / τ
+        # Clamped to [0,1] — valid continuous-time integration coefficient
         # =====================================================================
 
         gamma = torch.clamp(
@@ -285,6 +287,8 @@ class CAPLTCCell(nn.Module):
 
         # =====================================================================
         # CONTINUOUS-TIME DYNAMICS
+        # dh = tanh(α*(W*x + U*h))
+        # SINGLE activation — NOT applied again after integration
         # =====================================================================
 
         projected = (
@@ -307,7 +311,8 @@ class CAPLTCCell(nn.Module):
         )
 
         # =====================================================================
-        # STABLE CONTINUOUS-TIME UPDATE
+        # LEAKY INTEGRATION  (the true LTC update)
+        # h_new = (1-γ)*h_prev + γ*dh
         # =====================================================================
 
         h_new = (
@@ -324,12 +329,26 @@ class CAPLTCCell(nn.Module):
         )
 
         # =====================================================================
-        # SMOOTH STABILIZATION
+        # STABILIZATION — simple clamp only, NO second tanh
+        #
+        # OLD (broken):
+        #     h_new = torch.tanh(h_new) * 5.0
+        #
+        # WHY IT WAS BROKEN:
+        #   tanh saturates at ±1 → gradient near-zero for most values
+        #   multiplying by 5.0 only scales the output, does NOT fix gradients
+        #   result: all hidden states converge regardless of input
+        #
+        # FIX:
+        #     h_new = h_new.clamp(-5.0, 5.0)
+        #
+        # Clamp preserves gradient (gradient=1 inside range, 0 only at walls)
+        # Bounds hidden state to prevent blow-up without killing learning
         # =====================================================================
 
-        h_new = (
-            torch.tanh(h_new)
-            * 5.0
+        h_new = h_new.clamp(
+            min=-5.0,
+            max=5.0,
         )
 
         # =====================================================================
